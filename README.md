@@ -224,7 +224,9 @@ We welcome contributions! Please:
 
 ## License
 
-[Your license here - MIT recommended for trust]
+MIT License - see [LICENSE](LICENSE) file for details.
+
+This project is open source to promote transparency and trust in how your audio data is processed.
 
 ## Support
 

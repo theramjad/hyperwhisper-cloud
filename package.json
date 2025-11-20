@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Cloudflare Worker for edge-based Whisper transcription with AI post-processing",
   "main": "src/index.ts",
+  "license": "MIT",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
