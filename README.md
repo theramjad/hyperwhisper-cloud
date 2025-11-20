@@ -18,10 +18,17 @@ This repository contains the **complete source code** running on our edge server
 - **Nothing else**: No audio, no transcripts, no metadata, no analytics
 
 ### Data Retention
-- **Audio**: Deleted within seconds after transcription
+- **Audio**: Deleted within seconds after transcription (never written to disk)
 - **Transcripts**: Never stored on our servers (delivered directly to your device)
-- **Logs**: Cloudflare's standard edge logs (24-48 hours), no custom logging
+- **Logs**: Cloudflare's standard edge logs (24-48 hours), automatic sensitive data filtering
 - **Credits**: Stored until exhausted or license purchased
+
+### Third-Party Processing
+HyperWhisper Cloud uses Groq's API for transcription and post-processing:
+- **Audio sent to**: Groq Whisper (speech-to-text)
+- **Text sent to**: Groq Llama (typo correction)
+- **Groq's privacy**: See [Groq Privacy Policy](https://groq.com/privacy-policy/)
+- **For maximum privacy**: Use local Whisper models in the app (no cloud processing)
 
 ## Architecture
 
@@ -202,8 +209,9 @@ Users can verify the deployed code matches this repository:
 ## Privacy Policy
 
 - **No data collection**: We don't collect, store, or analyze user data
-- **No third-party sharing**: Audio is processed by Groq only for transcription
+- **No third-party sharing**: Audio is processed by Groq only for transcription (see Third-Party Processing above)
 - **No advertisements**: No tracking pixels, analytics, or ads
+- **Automatic log filtering**: Logs exclude audio, transcripts, and text (see `src/logger.ts:31-35`)
 - **Minimal logging**: Standard Cloudflare edge logs only (24-48 hour retention)
 
 ## Contributing
