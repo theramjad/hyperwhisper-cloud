@@ -1,0 +1,71 @@
+name = "hyperwhisper-v1"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat_v2"]
+
+[placement]
+mode = "smart"
+
+# Development environment
+[env.development]
+name = "hyperwhisper-v1-dev"
+
+[env.development.vars]
+ENVIRONMENT = "development"
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+POLAR_ORGANIZATION_ID = "732c78bd-50f0-497f-b7d3-0f1df8bb1f4d"
+POLAR_METER_ID = "595e2fdc-8a03-4647-aceb-e9706da0f74f"
+
+# Development KV namespaces (v1)
+[[env.development.kv_namespaces]]
+binding = "RATE_LIMITER"
+id = "aff5289c5d1342a59bcc7535a350afc9"
+
+[[env.development.kv_namespaces]]
+binding = "DEVICE_CREDITS"
+id = "88623c47392f43d183b5f041fa1566ba"
+
+[[env.development.kv_namespaces]]
+binding = "LICENSE_CACHE"
+id = "6e863d08932c45bc9063e60cdf1f5015"
+
+# Development custom domain
+[[env.development.routes]]
+pattern = "transcribe-dev-v1.hyperwhisper.com"
+custom_domain = true
+
+[env.development.observability]
+enabled = true
+head_sampling_rate = 1.0
+
+# Production environment
+[env.production]
+name = "hyperwhisper-v1-prod"
+
+[env.production.vars]
+ENVIRONMENT = "production"
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+POLAR_ORGANIZATION_ID = "34d49b08-4351-4ab7-9f79-c8d12a8cca43"
+POLAR_METER_ID = "f7a7873f-27f7-49ff-b45d-f3aff3429ad1"
+
+# Production KV namespaces (v1)
+[[env.production.kv_namespaces]]
+binding = "RATE_LIMITER"
+id = "7e39597efebe49d59fd49cead5361f8d"
+
+[[env.production.kv_namespaces]]
+binding = "DEVICE_CREDITS"
+id = "36019fbb98194feda455b1c39e47e492"
+
+[[env.production.kv_namespaces]]
+binding = "LICENSE_CACHE"
+id = "c24a0bf339dd415ba3f669e81923e310"
+
+# Production custom domain
+[[env.production.routes]]
+pattern = "transcribe-prod-v1.hyperwhisper.com"
+custom_domain = true
+
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1.0

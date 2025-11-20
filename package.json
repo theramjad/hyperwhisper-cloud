@@ -1,0 +1,28 @@
+{
+  "name": "hyperwhisper-worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker for edge-based Whisper transcription with AI post-processing",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:dev": "wrangler deploy --env development",
+    "deploy:prod": "wrangler deploy --env production",
+    "tail": "wrangler tail",
+    "tail:dev": "wrangler tail --env development",
+    "tail:prod": "wrangler tail --env production",
+    "kv:setup:dev": "npx wrangler kv:namespace create CREDIT_TRACKER --env development",
+    "kv:setup:prod": "npx wrangler kv:namespace create CREDIT_TRACKER --env production"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240117.0",
+    "typescript": "^5.3.3",
+    "wrangler": "^4.33.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@polar-sh/sdk": "^0.35.4"
+  }
+}
