@@ -200,11 +200,25 @@ export async function transcribeWithGroq(
   const responseJson = (await groqResponse.json()) as WhisperResponse;
   const extraction = extractTranscriptionText(responseJson);
 
+  // NO SPEECH DETECTED:
+  // When Groq returns a valid response but with empty text, this means
+  // no speech was detected in the audio (silence, background noise, etc.)
+  // Instead of throwing an error, we return a valid response with source='no_speech'
+  // so the client can display a friendly "No speech detected" message
   if (!extraction) {
-    logger.log('error', 'Transcription failed - no text returned', {
+    logger.log('info', 'No speech detected in audio', {
       responseKeys: isRecord(responseJson) ? Object.keys(responseJson) : 'non-object',
     });
-    throw new Error('Transcription failed - no text returned');
+
+    return {
+      text: '',
+      source: 'no_speech',
+      response: responseJson,
+      durationSeconds: 0,
+      language: responseJson.language,
+      segments: [],
+      costUsd: 0,
+    };
   }
 
   const detectedDuration = deriveDurationSeconds(responseJson.segments, responseJson.duration);

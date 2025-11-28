@@ -445,6 +445,31 @@ export default {
         whisperCostUsd: transcriptionResult.costUsd,
       });
 
+      // NO SPEECH DETECTED:
+      // When Groq returns a valid response but with empty text, return success with a flag
+      // instead of treating it as an error. This allows the client to show a friendly message.
+      // We don't charge credits for empty transcriptions.
+      if (transcriptionResult.source === 'no_speech') {
+        logger.log('info', 'No speech detected - returning empty transcription', {
+          whisperLatencyMs,
+        });
+
+        return new Response(JSON.stringify({
+          original: '',
+          corrected: '',
+          no_speech_detected: true,
+          requestId,
+        }), {
+          status: 200,
+          headers: {
+            ...getCORSHeaders(),
+            'content-type': 'application/json',
+            'X-Request-ID': requestId,
+            'X-Credits-Used': '0',
+          }
+        });
+      }
+
       // POST-PROCESSING: Optional AI enhancement
       const normalizedSystemPrompt = typeof requestData.post_processing_prompt === 'string'
         ? requestData.post_processing_prompt.trim()
