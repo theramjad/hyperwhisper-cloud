@@ -2,8 +2,8 @@
 // Manages trial credits for unlicensed users identified by device_id
 //
 // ALLOCATION:
-// - 100 credits per device_id (one-time allocation)
-// - Approximately 16 minutes of transcription
+// - 150 credits per device_id (one-time allocation)
+// - Approximately 24 minutes of transcription
 // - Stored in KV as `device_credits:{device_id}`
 //
 // SECURITY:
