@@ -5,13 +5,19 @@
 // 1. Authentication: Uses "Token {key}" header instead of "Bearer {key}"
 // 2. Request body: Raw binary audio instead of multipart/form-data
 // 3. Content-Type: Set to actual audio MIME type (e.g., "audio/mp4")
-// 4. Custom vocabulary: Uses "keywords" query parameter instead of "prompt" field
+// 4. Custom vocabulary: Uses "keyterm" or "keywords" query parameter (see below)
 // 5. Response format: Nested structure (results.channels[0].alternatives[0])
+//
+// VOCABULARY BOOSTING (KEYTERM vs KEYWORDS):
+// - KEYTERM: Monolingual only, Nova-3, up to 90% KRR improvement
+//   Used when language is explicitly specified (e.g., language=en)
+// - KEYWORDS: All languages, works with detect_language=true (multilingual)
+//   Used when language is "auto" or not specified
 //
 // PRICING (Nova-3 Batch):
 // - $0.0043 per minute of audio (billed per second)
 // - ~2.3x more expensive than Groq Whisper ($0.00185/min)
-// - But offers better accuracy and keywords boosting feature
+// - But offers better accuracy and vocabulary boosting features
 
 import type { Env, TranscriptionRequest, WhisperSegment } from './types';
 import type {
@@ -190,14 +196,33 @@ function convertUtterancesToSegments(utterances: DeepgramUtterance[]): WhisperSe
  * - utterances: true (groups words by natural speech breaks)
  * - detect_language: true (auto-detect when language not specified)
  * - language: BCP-47 code (when explicitly specified)
- * - keyterm: boosted vocabulary terms for Nova-3 (max 100)
- *   NOTE: Nova-3 uses 'keyterm', older models use 'keywords'
+ *
+ * VOCABULARY BOOSTING - KEYTERM VS KEYWORDS:
+ * Deepgram provides two different vocabulary boosting mechanisms:
+ *
+ * 1. KEYTERM (Nova-3 Monolingual Only):
+ *    - Parameter: keyterm=TERM:BOOST
+ *    - Only works when language is explicitly specified (monolingual transcription)
+ *    - Provides up to 90% improvement in Keyword Recall Rate (KRR)
+ *    - Maximum 500 tokens across all keyterms
+ *    - Best for: Named entities, product names, industry jargon, acronyms
+ *
+ * 2. KEYWORDS (All Languages, Legacy):
+ *    - Parameter: keywords=TERM:BOOST
+ *    - Works with all Deepgram models and language detection (multilingual)
+ *    - Provides moderate boost to recognition accuracy
+ *    - Recommended max 200 terms
+ *    - Required when: detect_language=true (cannot use keyterm with auto-detection)
+ *
+ * SELECTION LOGIC:
+ * - Language explicitly specified → Use 'keyterm' (monolingual, best accuracy)
+ * - Language "auto" or not specified → Use 'keywords' (multilingual compatible)
  *
  * @param language - ISO language code or "auto" for detection
- * @param keywords - Pre-formatted keyterms string (term:intensifier format)
+ * @param vocabularyTerms - Pre-formatted terms string (term:intensifier format)
  * @returns Full URL with query parameters
  */
-function buildDeepgramUrl(language: string | undefined, keywords: string): string {
+function buildDeepgramUrl(language: string | undefined, vocabularyTerms: string): string {
   const params = new URLSearchParams();
 
   // Model selection - Nova-3 is the latest and most accurate
@@ -214,20 +239,46 @@ function buildDeepgramUrl(language: string | undefined, keywords: string): strin
   // This provides data similar to Whisper's segments[]
   params.set('utterances', 'true');
 
-  // Language handling:
-  // - If "auto" or not specified: enable detection
-  // - If specific code: force that language
-  if (!language || language.toLowerCase() === 'auto') {
-    params.set('detect_language', 'true');
-  } else {
+  // LANGUAGE HANDLING:
+  // Determines both the transcription language AND vocabulary boosting method
+  //
+  // Two modes:
+  // 1. MONOLINGUAL (language explicitly specified):
+  //    - Sets language=CODE parameter
+  //    - Uses 'keyterm' for vocabulary (90% KRR improvement)
+  //
+  // 2. MULTILINGUAL (language "auto" or not specified):
+  //    - Enables detect_language=true
+  //    - Uses 'keywords' for vocabulary (works with detection)
+  //    - Deepgram returns detected_language in response
+  const isMonolingual = language && language.toLowerCase() !== 'auto';
+
+  if (isMonolingual) {
+    // MONOLINGUAL MODE: Force specific language
     // Deepgram uses BCP-47 codes (same as Whisper)
     params.set('language', language.toLowerCase());
+  } else {
+    // MULTILINGUAL MODE: Enable automatic language detection
+    // Deepgram will return detected_language in the response
+    params.set('detect_language', 'true');
   }
 
-  // Add keyterms for custom vocabulary boosting
-  // NOTE: Nova-3 uses 'keyterm' parameter, not 'keywords' (which is for older models)
-  if (keywords.length > 0) {
-    params.set('keyterm', keywords);
+  // VOCABULARY BOOSTING:
+  // Choose parameter based on language mode
+  //
+  // IMPORTANT: 'keyterm' parameter ONLY works with monolingual transcription.
+  // When detect_language=true is set, 'keyterm' is silently ignored by Deepgram.
+  // For multilingual/auto-detect, we must use 'keywords' parameter instead.
+  //
+  // Reference: Deepgram Keyterm Prompting docs - "Monolingual Only"
+  if (vocabularyTerms.length > 0) {
+    if (isMonolingual) {
+      // Use 'keyterm' for monolingual - provides up to 90% KRR improvement
+      params.set('keyterm', vocabularyTerms);
+    } else {
+      // Use 'keywords' for multilingual - compatible with detect_language
+      params.set('keywords', vocabularyTerms);
+    }
   }
 
   return `${DEEPGRAM_API_URL}?${params.toString()}`;
@@ -277,6 +328,14 @@ export async function transcribeWithDeepgram(
   // STEP 4: Build URL with query parameters
   const url = buildDeepgramUrl(requestData.language, keywords);
 
+  // Determine vocabulary boosting method for logging
+  // KEYTERM: Monolingual only (language explicitly specified), 90% KRR improvement
+  // KEYWORDS: Multilingual/auto-detect compatible
+  const isMonolingual = requestData.language && requestData.language.toLowerCase() !== 'auto';
+  const vocabularyMethod = keywords.length > 0
+    ? (isMonolingual ? 'keyterm' : 'keywords')
+    : 'none';
+
   // Log detailed request information before sending to Deepgram
   logger.log('info', 'Dispatching Deepgram transcription to API', {
     endpoint: url,
@@ -284,8 +343,9 @@ export async function transcribeWithDeepgram(
     fileSize: audioBytes.byteLength,
     fileMimeType: mimeType,
     language: requestData.language || 'auto',
-    hasKeywords: keywords.length > 0,
-    keywordCount: keywords ? keywords.split(',').length : 0,
+    languageMode: isMonolingual ? 'monolingual' : 'multilingual',
+    vocabularyMethod,  // 'keyterm' (monolingual), 'keywords' (multilingual), or 'none'
+    vocabularyTermCount: keywords ? keywords.split(',').length : 0,
     estimatedDurationSeconds: estimatedSeconds,
   });
 
