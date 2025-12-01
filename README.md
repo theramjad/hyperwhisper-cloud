@@ -24,9 +24,10 @@ This repository contains the **complete source code** running on our edge server
 - **Credits**: Stored until exhausted or license purchased
 
 ### Third-Party Processing
-HyperWhisper Cloud uses Groq's API for transcription and post-processing:
-- **Audio sent to**: Groq Whisper (speech-to-text)
+HyperWhisper Cloud uses Deepgram for transcription and Groq for post-processing:
+- **Audio sent to**: Deepgram Nova-3 (speech-to-text)
 - **Text sent to**: Groq Llama (typo correction)
+- **Deepgram's privacy**: See [Deepgram Privacy Policy](https://deepgram.com/privacy)
 - **Groq's privacy**: See [Groq Privacy Policy](https://groq.com/privacy-policy/)
 - **For maximum privacy**: Use local Whisper models in the app (no cloud processing)
 
@@ -36,7 +37,7 @@ Built on Cloudflare Workers for global edge computing with zero cold starts.
 
 ### Stack
 - **Runtime**: Cloudflare Workers (V8 isolates)
-- **Transcription**: Groq Whisper large-v3-turbo
+- **Transcription**: Deepgram Nova-3 ($0.0043/min)
 - **Post-processing**: Groq Llama 3.3 70B (typo correction)
 - **Storage**: Cloudflare KV (credits only)
 - **Language**: TypeScript
@@ -45,7 +46,7 @@ Built on Cloudflare Workers for global edge computing with zero cold starts.
 ```
 1. Client uploads audio (multipart/form-data)
 2. Worker validates credits (device or license)
-3. Audio sent to Groq for transcription
+3. Audio sent to Deepgram for transcription
 4. Text sent to Groq for post-processing
 5. Credits deducted, balance returned
 6. Response sent to client
@@ -66,7 +67,7 @@ Built on Cloudflare Workers for global edge computing with zero cold starts.
 - **Validation caching**: 7-day cache for performance
 
 ### Cost Calculation
-Credits based on actual Groq API costs (~$0.001-0.004 per request):
+Credits based on actual Deepgram + Groq API costs (~$0.002-0.006 per request):
 - **Trial**: $1.00 = 1000 credits (~100 minutes)
 - **Licensed**: $5.00 = 5000 credits (~500 minutes)
 - **Rate**: ~10 credits per audio minute
