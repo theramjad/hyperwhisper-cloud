@@ -589,7 +589,8 @@ export default {
               transcription_cost_usd: transcriptionResult.costUsd,
               post_processing_cost_usd: cleanupCostUsd,
               total_cost_usd: totalCostUsd,
-              language: transcriptionResult.language,
+              // Fallback chain: detected language → requested language → 'auto'
+              language: transcriptionResult.language ?? requestData.language ?? 'auto',
               mode: requestData.mode,
               post_processing_applied: shouldPostProcess,
             },
