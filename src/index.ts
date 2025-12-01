@@ -1,6 +1,13 @@
 // HYPERWHISPER CLOUDFLARE WORKER
-// Edge-based transcription service using Groq API (Whisper + Llama)
+// Edge-based transcription service using Deepgram Nova-3 for STT and Groq Llama for post-processing
 // Now with Polar-based billing for licensed users and IP rate limiting for anonymous users
+//
+// ARCHITECTURE:
+// Audio → Deepgram Nova-3 (STT) → Groq Llama 3.3 70B (post-processing) → Response
+//
+// PROVIDERS:
+// - STT: Deepgram Nova-3 ($0.0043/min, 100 concurrent requests, 2GB max file)
+// - Post-processing: Groq Llama 3.3 70B ($0.59/1M prompt, $0.79/1M completion)
 
 import type { Env, TranscriptionRequest } from './types';
 import { Logger } from './logger';
@@ -11,8 +18,8 @@ import {
   stripCleanMarkers,
 } from './text-processing';
 import { formatUsd } from './cost-calculator';
+import { transcribeWithDeepgram } from './deepgram-client';
 import {
-  transcribeWithGroq,
   requestGroqChat,
   buildCorrectionRequest,
 } from './groq-client';
@@ -125,8 +132,9 @@ export default {
       const audioBytes = new Uint8Array(audioArrayBuffer);
       audioSize = audioBytes.byteLength;
 
-      // Enforce maximum file size (25 MB)
-      const MAX_AUDIO_SIZE = 25 * 1024 * 1024; // 25 MB in bytes
+      // Enforce maximum file size (2 GB - Deepgram's limit)
+      // Increased from 25 MB (Groq Whisper limit) to 2 GB for Deepgram Nova-3
+      const MAX_AUDIO_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB in bytes
       if (audioSize > MAX_AUDIO_SIZE) {
         logger.log('warn', 'Audio file exceeds maximum size', {
           audioSize,
@@ -135,8 +143,8 @@ export default {
         });
         return new Response(JSON.stringify({
           error: 'File too large',
-          message: `Audio file must be 25 MB or smaller. Your file is ${(audioSize / (1024 * 1024)).toFixed(2)} MB.`,
-          max_size_mb: 25,
+          message: `Audio file must be 2 GB or smaller. Your file is ${(audioSize / (1024 * 1024)).toFixed(2)} MB.`,
+          max_size_mb: 2048,
           actual_size_mb: parseFloat((audioSize / (1024 * 1024)).toFixed(2))
         }), {
           status: 413, // Payload Too Large
@@ -390,7 +398,24 @@ export default {
         });
       }
 
-      // Validate Groq API key
+      // Validate Deepgram API key (required for STT)
+      if (!env.DEEPGRAM_API_KEY || env.DEEPGRAM_API_KEY.trim().length === 0) {
+        logger.log('error', 'Missing Deepgram API key');
+        return new Response(JSON.stringify({
+          error: 'Server misconfigured',
+          message: 'Deepgram API key is not set on the worker',
+          requestId,
+        }), {
+          status: 500,
+          headers: {
+            ...getCORSHeaders(),
+            'content-type': 'application/json',
+            'X-Request-ID': requestId,
+          }
+        });
+      }
+
+      // Validate Groq API key (required for post-processing)
       if (!env.GROQ_API_KEY || env.GROQ_API_KEY.trim().length === 0) {
         logger.log('error', 'Missing Groq API key');
         return new Response(JSON.stringify({
@@ -407,21 +432,22 @@ export default {
         });
       }
 
-      // TRANSCRIPTION: Process audio with Groq (with retry logic)
-      logger.log('info', 'Preparing Groq transcription request');
-      const whisperStartTime = Date.now();
+      // TRANSCRIPTION: Process audio with Deepgram Nova-3 (with retry logic)
+      // Deepgram provides better accuracy and keyword boosting compared to Groq Whisper
+      logger.log('info', 'Preparing Deepgram transcription request');
+      const sttStartTime = Date.now();
 
       // Wrap transcription in retry logic to handle transient failures
       // This provides resilience against network issues, API timeouts, and temporary service unavailability
       // Retry schedule: 1s, 2s, 4s delays = 4 total attempts over ~7 seconds
       const transcriptionResult = await retryWithBackoff(
-        () => transcribeWithGroq(requestData, env, logger, estimatedSeconds),
+        () => transcribeWithDeepgram(requestData, env, logger, estimatedSeconds),
         {
           maxRetries: 3,
           initialDelayMs: 1000,
           backoffMultiplier: 2,
           onRetry: (attempt, error, delayMs) => {
-            logger.log('warn', 'Groq transcription retry', {
+            logger.log('warn', 'Deepgram transcription retry', {
               attempt,
               maxRetries: 3,
               error: error.message,
@@ -431,27 +457,28 @@ export default {
           }
         }
       );
-      const whisperLatencyMs = Date.now() - whisperStartTime;
+      const sttLatencyMs = Date.now() - sttStartTime;
 
       const baseTranscription = transcriptionResult.text;
 
       logger.log('info', 'Transcription complete', {
-        whisperLatencyMs,
+        sttLatencyMs,
+        sttProvider: 'deepgram-nova3',
         detectedLanguage: transcriptionResult.language,
         audioDuration: transcriptionResult.durationSeconds,
         textLength: baseTranscription.length,
         segmentCount: transcriptionResult.segments?.length ?? 0,
         transcriptionSource: transcriptionResult.source,
-        whisperCostUsd: transcriptionResult.costUsd,
+        sttCostUsd: transcriptionResult.costUsd,
       });
 
       // NO SPEECH DETECTED:
-      // When Groq returns a valid response but with empty text, return success with a flag
+      // When Deepgram returns a valid response but with empty text, return success with a flag
       // instead of treating it as an error. This allows the client to show a friendly message.
       // We don't charge credits for empty transcriptions.
       if (transcriptionResult.source === 'no_speech') {
         logger.log('info', 'No speech detected - returning empty transcription', {
-          whisperLatencyMs,
+          sttLatencyMs,
         });
 
         return new Response(JSON.stringify({
@@ -599,13 +626,14 @@ export default {
 
       logger.log('info', 'Request completed successfully', {
         requestLatencyMs,
-        whisperLatencyMs,
+        sttLatencyMs,
+        sttProvider: 'deepgram-nova3',
         cleanupLatencyMs,
         rawTranscriptChars: baseTranscription.length,
         cleanTranscriptChars: correctedText.length,
         postProcessingApplied: shouldPostProcess,
         cleanupPromptChars: normalizedSystemPrompt?.length ?? 0,
-        whisperCostUsd: transcriptionResult.costUsd,
+        sttCostUsd: transcriptionResult.costUsd,
         cleanupCostUsd,
         totalCostUsd,
         creditsDebited: actualCredits,
@@ -622,6 +650,7 @@ export default {
           segments: transcriptionResult.segments,
           requestId,
           is_licensed: isLicensed,
+          stt_provider: 'deepgram-nova3', // Added to track which provider was used
         },
         costs: {
           transcription_usd: transcriptionResult.costUsd,
@@ -634,6 +663,7 @@ export default {
           ...getCORSHeaders(),
           'content-type': 'application/json',
           'X-Request-ID': requestId,
+          'X-STT-Provider': 'deepgram-nova3',
           'X-Transcription-Cost-Usd': formatUsd(transcriptionResult.costUsd),
           'X-Post-Processing-Cost-Usd': formatUsd(cleanupCostUsd),
           'X-Total-Cost-Usd': formatUsd(totalCostUsd),

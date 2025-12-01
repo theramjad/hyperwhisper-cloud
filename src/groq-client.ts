@@ -1,5 +1,8 @@
 // GROQ API CLIENT MODULE
-// Handles API interactions with Groq for transcription and chat completion
+// Handles API interactions with Groq for chat completion (Llama post-processing)
+//
+// NOTE: Whisper transcription has been migrated to Deepgram Nova-3 (see deepgram-client.ts)
+// The transcribeWithGroq function is deprecated and kept for rollback purposes only.
 
 import type {
   Env,
@@ -121,6 +124,9 @@ export type CorrectionRequestPayload = {
 
 /**
  * Send the audio payload to Groq's transcription endpoint and normalize the response
+ *
+ * @deprecated Replaced by transcribeWithDeepgram() in deepgram-client.ts
+ * Kept for rollback purposes. Use Deepgram Nova-3 for new transcriptions.
  */
 export async function transcribeWithGroq(
   requestData: TranscriptionRequest,

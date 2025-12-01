@@ -2,7 +2,8 @@
 // Centralized TypeScript interfaces for the edge transcription service
 
 export interface Env {
-  GROQ_API_KEY: string;
+  DEEPGRAM_API_KEY: string; // Deepgram API key for Nova-3 transcription
+  GROQ_API_KEY: string; // Groq API key for Llama post-processing
   GROQ_BASE_URL?: string;
   RATE_LIMITER: KVNamespace; // IP-based rate limiting (daily quota)
   DEVICE_CREDITS: KVNamespace; // Device trial credits (1000 credits per device_id)
@@ -85,4 +86,73 @@ export interface ErrorResponse {
   minutes_remaining?: number;
   minutes_required?: number;
   credits_per_minute?: number;
+}
+
+// DEEPGRAM API RESPONSE TYPES
+// Structure returned from Deepgram Nova-3 /listen endpoint
+//
+// Response hierarchy:
+// DeepgramResponse
+//   └── results
+//       ├── channels[] (one per audio channel, usually 1)
+//       │   └── alternatives[] (transcription variants, usually 1)
+//       │       ├── transcript (full text)
+//       │       ├── confidence (0-1)
+//       │       └── words[] (word-level timing)
+//       └── utterances[] (speech segments with timing)
+
+export interface DeepgramResponse {
+  metadata: DeepgramMetadata;
+  results: DeepgramResults;
+}
+
+export interface DeepgramMetadata {
+  request_id: string;
+  sha256?: string;
+  created?: string;
+  duration: number; // Audio duration in seconds
+  channels: number; // Number of audio channels (usually 1)
+  models?: string[];
+  model_info?: Record<string, unknown>;
+}
+
+export interface DeepgramResults {
+  channels: DeepgramChannel[];
+  utterances?: DeepgramUtterance[];
+}
+
+export interface DeepgramChannel {
+  alternatives: DeepgramAlternative[];
+  detected_language?: string; // BCP-47 language code (e.g., "en", "ja")
+  language_confidence?: number; // 0-1 confidence score
+}
+
+export interface DeepgramAlternative {
+  transcript: string; // Full transcript text
+  confidence: number; // 0-1 overall confidence
+  words: DeepgramWord[]; // Word-level details with timing
+}
+
+export interface DeepgramWord {
+  word: string; // The word as spoken
+  start: number; // Start time in seconds
+  end: number; // End time in seconds
+  confidence: number; // 0-1 word confidence
+  punctuated_word?: string; // Word with punctuation (when smart_format=true)
+  speaker?: number; // Speaker ID (when diarize=true)
+  speaker_confidence?: number; // Speaker confidence (when diarize=true)
+}
+
+// DEEPGRAM UTTERANCE
+// Groups words by natural speech breaks (pauses, breaths)
+// Provides data similar to Whisper's segments[]
+export interface DeepgramUtterance {
+  start: number; // Start time in seconds
+  end: number; // End time in seconds
+  confidence: number; // 0-1 utterance confidence
+  channel: number; // Audio channel index (usually 0)
+  transcript: string; // Utterance text
+  words: DeepgramWord[]; // Words in this utterance
+  speaker?: number; // Speaker ID (when diarize=true)
+  id?: string; // Utterance ID
 }

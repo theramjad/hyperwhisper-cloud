@@ -1,14 +1,29 @@
 // COST CALCULATION MODULE
-// Handles pricing calculations for Groq API usage (Whisper + LLM)
+// Handles pricing calculations for Deepgram Nova-3 and Groq Llama usage
+//
+// PRICING SUMMARY:
+// - Deepgram Nova-3 (STT): $0.0043/minute ($0.258/hour)
+// - Groq Llama 3.3 70B (post-processing): $0.59/1M prompt tokens, $0.79/1M completion tokens
+//
+// COST COMPARISON (STT only):
+// - Deepgram Nova-3: $0.0043/min = $0.258/hour
+// - Groq Whisper (old): $0.00185/min = $0.111/hour
+// - Deepgram is ~2.3x more expensive but offers better accuracy and keyword boosting
 
 import type { GroqUsage, WhisperSegment } from './types';
 import { isRecord, roundUpToTenth } from './utils';
 
-// Pricing (USD)
-const WHISPER_COST_PER_AUDIO_HOUR = 0.111; // whisper-large-v3 pricing per Groq docs
-const WHISPER_MIN_BILLABLE_SECONDS = 10;
+// Deepgram Nova-3 Pricing (USD)
+// Source: https://deepgram.com/pricing (batch/pre-recorded rate)
+const DEEPGRAM_COST_PER_AUDIO_MINUTE = 0.0043; // $0.0043/minute for Nova-3 batch
+
+// Groq Llama Pricing (USD) - used for post-processing
 const LLAMA_PROMPT_COST_PER_TOKEN = 0.59 / 1_000_000; // $0.59 per 1M prompt tokens
 const LLAMA_COMPLETION_COST_PER_TOKEN = 0.79 / 1_000_000; // $0.79 per 1M completion tokens
+
+// Legacy Groq Whisper pricing (kept for reference/migration)
+const WHISPER_COST_PER_AUDIO_HOUR = 0.111; // whisper-large-v3 pricing per Groq docs
+const WHISPER_MIN_BILLABLE_SECONDS = 10;
 
 // CREDIT MODEL: 1 credit = $0.001 USD
 const USD_PER_CREDIT = 0.001;
@@ -39,7 +54,28 @@ export function deriveDurationSeconds(
 }
 
 /**
+ * DEEPGRAM TRANSCRIPTION COST
+ * Convert audio duration to USD using Deepgram Nova-3 batch pricing
+ *
+ * Deepgram bills per second of audio (no minimum billable duration)
+ * Rate: $0.0043 per minute = $0.0000717 per second
+ *
+ * @param durationSeconds - Audio duration in seconds
+ * @returns Cost in USD (micro-dollar precision)
+ */
+export function computeDeepgramTranscriptionCost(durationSeconds: number): number {
+  // Deepgram bills per second with no minimum
+  const durationMinutes = durationSeconds / 60;
+  const raw = durationMinutes * DEEPGRAM_COST_PER_AUDIO_MINUTE;
+  return roundUsd(raw);
+}
+
+/**
+ * LEGACY: Groq Whisper transcription cost
  * Convert Whisper duration to USD (Groq publishes cost per audio hour)
+ * Kept for reference during migration - will be removed after full Deepgram switch
+ *
+ * @deprecated Use computeDeepgramTranscriptionCost instead
  */
 export function computeTranscriptionCost(durationSeconds: number): number {
   const billableSeconds = Math.max(durationSeconds, WHISPER_MIN_BILLABLE_SECONDS);
