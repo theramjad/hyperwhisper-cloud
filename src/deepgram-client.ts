@@ -8,11 +8,11 @@
 // 4. Custom vocabulary: Uses "keyterm" or "keywords" query parameter (see below)
 // 5. Response format: Nested structure (results.channels[0].alternatives[0])
 //
-// VOCABULARY BOOSTING (KEYTERM vs KEYWORDS):
+// VOCABULARY BOOSTING (KEYTERM for Nova-3):
 // - KEYTERM: Monolingual only, Nova-3, up to 90% KRR improvement
 //   Used when language is explicitly specified (e.g., language=en)
-// - KEYWORDS: All languages, works with detect_language=true (multilingual)
-//   Used when language is "auto" or not specified
+// - NONE: Nova-3 with auto-detect has no vocabulary support
+//   (keywords parameter is rejected by Nova-3, keyterm is ignored with detect_language=true)
 //
 // PRICING (Nova-3 Batch):
 // - $0.0043 per minute of audio (billed per second)
@@ -200,23 +200,27 @@ function convertUtterancesToSegments(utterances: DeepgramUtterance[]): WhisperSe
  * VOCABULARY BOOSTING - KEYTERM VS KEYWORDS:
  * Deepgram provides two different vocabulary boosting mechanisms:
  *
- * 1. KEYTERM (Nova-3 Monolingual Only):
+ * 1. KEYTERM (Nova-3 Only):
  *    - Parameter: keyterm=TERM:BOOST
+ *    - Nova-3 ONLY supports keyterm (does NOT support keywords parameter)
  *    - Only works when language is explicitly specified (monolingual transcription)
  *    - Provides up to 90% improvement in Keyword Recall Rate (KRR)
+ *    - When detect_language=true, keyterm is SILENTLY IGNORED by Deepgram
+ *    - Nova-3 with auto-detect: No vocabulary support (keywords rejected, keyterm ignored)
  *    - Maximum 500 tokens across all keyterms
  *    - Best for: Named entities, product names, industry jargon, acronyms
  *
- * 2. KEYWORDS (All Languages, Legacy):
+ * 2. KEYWORDS (Nova-2, Nova-1, Enhanced):
  *    - Parameter: keywords=TERM:BOOST
- *    - Works with all Deepgram models and language detection (multilingual)
+ *    - Works with Nova-2, Nova-1, Enhanced models (all languages)
+ *    - Nova-3 does NOT support this parameter - will return 400 error
  *    - Provides moderate boost to recognition accuracy
  *    - Recommended max 200 terms
- *    - Required when: detect_language=true (cannot use keyterm with auto-detection)
+ *    - Compatible with: detect_language=true (multilingual mode)
  *
- * SELECTION LOGIC:
- * - Language explicitly specified → Use 'keyterm' (monolingual, best accuracy)
- * - Language "auto" or not specified → Use 'keywords' (multilingual compatible)
+ * SELECTION LOGIC FOR NOVA-3:
+ * - Language explicitly specified → Use 'keyterm' (monolingual, 90% KRR improvement)
+ * - Language "auto" or not specified → No vocabulary parameter (keyterm ignored, keywords rejected)
  *
  * @param language - ISO language code or "auto" for detection
  * @param vocabularyTerms - Pre-formatted terms string (term:intensifier format)
@@ -263,23 +267,30 @@ function buildDeepgramUrl(language: string | undefined, vocabularyTerms: string)
     params.set('detect_language', 'true');
   }
 
-  // VOCABULARY BOOSTING:
-  // Choose parameter based on language mode
+  // VOCABULARY BOOSTING FOR NOVA-3:
+  // Nova-3 ONLY supports 'keyterm' parameter (not 'keywords')
   //
-  // IMPORTANT: 'keyterm' parameter ONLY works with monolingual transcription.
-  // When detect_language=true is set, 'keyterm' is silently ignored by Deepgram.
-  // For multilingual/auto-detect, we must use 'keywords' parameter instead.
+  // KEYTERM REQUIREMENTS:
+  // - Only works when language is explicitly specified (monolingual mode)
+  // - When detect_language=true, keyterm is SILENTLY IGNORED by Deepgram
+  // - Provides up to 90% improvement in Keyword Recall Rate (KRR)
+  //
+  // NOVA-3 DOES NOT SUPPORT 'keywords' PARAMETER:
+  // - Attempting to use 'keywords' with Nova-3 returns 400 error
+  // - Error message: "Keywords are not supported for Nova-3. Please use `keyterm` instead."
+  //
+  // BEHAVIOR:
+  // - Monolingual (language explicitly specified): Use 'keyterm' for 90% KRR boost
+  // - Multilingual (language "auto" or auto-detect): No vocabulary parameter
+  //   (keyterm would be ignored, keywords is rejected by Nova-3)
   //
   // Reference: Deepgram Keyterm Prompting docs - "Monolingual Only"
-  if (vocabularyTerms.length > 0) {
-    if (isMonolingual) {
-      // Use 'keyterm' for monolingual - provides up to 90% KRR improvement
-      params.set('keyterm', vocabularyTerms);
-    } else {
-      // Use 'keywords' for multilingual - compatible with detect_language
-      params.set('keywords', vocabularyTerms);
-    }
+  if (vocabularyTerms.length > 0 && isMonolingual) {
+    // Nova-3 with explicit language: Use 'keyterm' for 90% KRR improvement
+    params.set('keyterm', vocabularyTerms);
   }
+  // Note: When language=auto (multilingual), we don't add any vocabulary parameter
+  // because Nova-3 doesn't support 'keywords' and 'keyterm' is ignored with detect_language=true
 
   return `${DEEPGRAM_API_URL}?${params.toString()}`;
 }
@@ -330,11 +341,9 @@ export async function transcribeWithDeepgram(
 
   // Determine vocabulary boosting method for logging
   // KEYTERM: Monolingual only (language explicitly specified), 90% KRR improvement
-  // KEYWORDS: Multilingual/auto-detect compatible
+  // NONE: Multilingual/auto-detect (Nova-3 doesn't support keywords, keyterm is ignored)
   const isMonolingual = requestData.language && requestData.language.toLowerCase() !== 'auto';
-  const vocabularyMethod = keywords.length > 0
-    ? (isMonolingual ? 'keyterm' : 'keywords')
-    : 'none';
+  const vocabularyMethod = (keywords.length > 0 && isMonolingual) ? 'keyterm' : 'none';
 
   // Log detailed request information before sending to Deepgram
   logger.log('info', 'Dispatching Deepgram transcription to API', {
