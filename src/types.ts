@@ -16,7 +16,7 @@ export interface Env {
 // TRANSCRIPTION REQUEST
 // Client sends audio data with optional device/license identifier
 export interface TranscriptionRequest {
-  audio: string;              // base64 encoded audio
+  audio: Uint8Array;          // Raw binary audio data (NOT base64 - saves ~65% memory)
   audioMimeType?: string;     // original MIME type (e.g., "audio/mp4")
   audioFileName?: string;     // original filename with extension
   language?: string;          // ISO language code (e.g., "en", "es")

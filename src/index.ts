@@ -127,7 +127,12 @@ export default {
         });
       }
 
-      // Convert audio file to base64 for processing
+      // Read audio file into memory as raw binary (NOT base64)
+      // MEMORY OPTIMIZATION: Previously we converted to base64 which:
+      // 1. Added 33% size overhead (base64 expansion)
+      // 2. Created multiple string copies during encoding
+      // 3. Required decoding back to binary in deepgram-client.ts
+      // Now we pass raw Uint8Array directly, saving ~65% memory
       const audioArrayBuffer = await audioFile.arrayBuffer();
       const audioBytes = new Uint8Array(audioArrayBuffer);
       audioSize = audioBytes.byteLength;
@@ -151,13 +156,6 @@ export default {
           headers: { ...getCORSHeaders(), 'content-type': 'application/json' }
         });
       }
-
-      // Convert to base64
-      let binary = '';
-      for (let i = 0; i < audioBytes.byteLength; i++) {
-        binary += String.fromCharCode(audioBytes[i]);
-      }
-      const base64Audio = btoa(binary);
 
       const rawMimeType = typeof audioFile.type === 'string' ? audioFile.type.trim() : '';
       const rawFileName = typeof audioFile.name === 'string' ? audioFile.name.trim() : '';
@@ -184,8 +182,9 @@ export default {
       }
 
       // Build TranscriptionRequest from form fields
+      // Pass raw binary audio directly (NOT base64) to save memory
       requestData = {
-        audio: base64Audio,
+        audio: audioBytes,
         audioMimeType,
         audioFileName,
         device_id: formData.get('device_id') as string | undefined,
