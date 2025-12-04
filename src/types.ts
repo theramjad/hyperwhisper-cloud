@@ -48,10 +48,6 @@ export interface WhisperResponse {
   duration?: number;
   segments?: WhisperSegment[];
   task?: string;
-  x_groq?: {
-    id?: string;
-    processing_time?: number;
-  };
 }
 
 export interface GroqUsage {
@@ -74,18 +70,6 @@ export interface UsageResponse {
   device_id?: string; // Device ID for trial users
   total_allocated?: number; // Total credits allocated (trial users only)
   credits_used?: number; // Credits used so far (trial users only)
-}
-
-// ERROR RESPONSE
-// Standardized error format
-export interface ErrorResponse {
-  error: string;
-  message?: string;
-  details?: any;
-  credits_remaining?: number; // Include balance in credit-related errors
-  minutes_remaining?: number;
-  minutes_required?: number;
-  credits_per_minute?: number;
 }
 
 // DEEPGRAM API RESPONSE TYPES
