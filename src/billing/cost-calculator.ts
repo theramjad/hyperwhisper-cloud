@@ -10,8 +10,8 @@
 // - Groq Whisper (old): $0.00185/min = $0.111/hour
 // - Deepgram is ~2.3x more expensive but offers better accuracy and keyword boosting
 
-import type { GroqUsage, WhisperSegment } from './types';
-import { isRecord, roundUpToTenth } from './utils';
+import type { GroqUsage, WhisperSegment } from '../types';
+import { isRecord, roundUpToTenth } from '../utils/utils';
 
 // Deepgram Nova-3 Pricing (USD)
 // Source: https://deepgram.com/pricing (batch/pre-recorded rate)

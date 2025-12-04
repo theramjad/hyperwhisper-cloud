@@ -8,11 +8,11 @@
 // - Balance checks: Query customer meter balance before processing
 
 import { Polar } from '@polar-sh/sdk';
-import { Logger } from './logger';
+import { Logger } from '../utils/logger';
 import { CustomerMetersListResponse } from '@polar-sh/sdk/dist/commonjs/models/operations/customermeterslist';
 import { getLicenseFromCache, setLicenseInCache } from './license-cache';
-import { CREDITS_PER_MINUTE } from './constants/credits';
-import { roundToTenth, roundUpToTenth } from './utils';
+import { CREDITS_PER_MINUTE } from '../constants/credits';
+import { roundToTenth, roundUpToTenth } from '../utils/utils';
 
 // Meter configuration
 const METER_SLUG = 'transcription_credits'; // Must match meter created in Polar dashboard

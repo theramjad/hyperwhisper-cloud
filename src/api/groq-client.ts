@@ -10,11 +10,11 @@ import type {
   WhisperResponse,
   WhisperSegment,
   GroqUsage,
-} from './types';
-import { Logger } from './logger';
-import { base64ToUint8Array, safeReadText, isRecord } from './utils';
-import { extractTranscriptionText } from './text-processing';
-import { computeTranscriptionCost, deriveDurationSeconds, computeChatCost, isGroqUsage } from './cost-calculator';
+} from '../types';
+import { Logger } from '../utils/logger';
+import { base64ToUint8Array, safeReadText, isRecord } from '../utils/utils';
+import { extractTranscriptionText } from '../utils/text-processing';
+import { computeTranscriptionCost, deriveDurationSeconds, computeChatCost, isGroqUsage } from '../billing/cost-calculator';
 
 const DEFAULT_GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
 const GROQ_TRANSCRIPTION_MODEL = 'whisper-large-v3';

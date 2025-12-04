@@ -19,14 +19,14 @@
 // - ~2.3x more expensive than Groq Whisper ($0.00185/min)
 // - But offers better accuracy and vocabulary boosting features
 
-import type { Env, TranscriptionRequest, WhisperSegment } from './types';
+import type { Env, TranscriptionRequest, WhisperSegment } from '../types';
 import type {
   DeepgramResponse,
   DeepgramUtterance,
-} from './types';
-import { Logger } from './logger';
-import { safeReadText } from './utils';
-import { computeDeepgramTranscriptionCost } from './cost-calculator';
+} from '../types';
+import { Logger } from '../utils/logger';
+import { safeReadText } from '../utils/utils';
+import { computeDeepgramTranscriptionCost } from '../billing/cost-calculator';
 
 // Deepgram API configuration
 const DEEPGRAM_API_URL = 'https://api.deepgram.com/v1/listen';

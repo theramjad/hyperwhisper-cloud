@@ -10,30 +10,25 @@
 // - Post-processing: Groq Llama 3.3 70B ($0.59/1M prompt, $0.79/1M completion)
 
 import type { Env, TranscriptionRequest } from './types';
-import { Logger } from './logger';
-import { parseBoolean, roundToTenth, roundUpToTenth, retryWithBackoff } from './utils';
+
+// Utils
+import { Logger } from './utils/logger';
+import { parseBoolean, roundToTenth, roundUpToTenth, retryWithBackoff } from './utils/utils';
 import {
   extractCorrectedText,
   buildTranscriptUserContent,
   stripCleanMarkers,
-} from './text-processing';
-import { formatUsd } from './cost-calculator';
-import { transcribeWithDeepgram } from './deepgram-client';
+} from './utils/text-processing';
+
+// API clients
+import { transcribeWithDeepgram } from './api/deepgram-client';
 import {
   requestGroqChat,
   buildCorrectionRequest,
-} from './groq-client';
-import {
-  getCORSHeaders,
-  handleCORS,
-  handleUsageQuery,
-} from './handlers';
-import {
-  checkRateLimit,
-  incrementUsage,
-  isIPBlocked,
-  formatRateLimitHeaders,
-} from './rate-limiter';
+} from './api/groq-client';
+
+// Billing
+import { formatUsd } from './billing/cost-calculator';
 import {
   createPolarClient,
   validateAndGetCustomer,
@@ -41,12 +36,27 @@ import {
   ingestUsageEvent,
   calculateCreditsForCost,
   hasSufficientBalance,
-} from './polar-billing';
+} from './billing/polar-billing';
 import {
   getDeviceBalance,
   deductDeviceCredits,
   hasDeviceSufficientCredits,
-} from './device-credits';
+} from './billing/device-credits';
+
+// Middleware
+import {
+  getCORSHeaders,
+  handleCORS,
+  handleUsageQuery,
+} from './middleware/handlers';
+import {
+  checkRateLimit,
+  incrementUsage,
+  isIPBlocked,
+  formatRateLimitHeaders,
+} from './middleware/rate-limiter';
+
+// Constants
 import { CREDITS_PER_MINUTE, TRIAL_CREDIT_ALLOCATION } from './constants/credits';
 
 // Cloudflare Worker entry point

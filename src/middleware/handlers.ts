@@ -1,19 +1,19 @@
 // ROUTE HANDLERS MODULE
 // HTTP request handlers for usage queries
 
-import type { Env, UsageResponse } from './types';
-import { Logger } from './logger';
+import type { Env, UsageResponse } from '../types';
+import { Logger } from '../utils/logger';
 import { getUsageStats } from './rate-limiter';
 import {
   createPolarClient,
   validateAndGetCustomer,
   getCustomerMeterBalance,
   formatMeterBalance
-} from './polar-billing';
+} from '../billing/polar-billing';
 import {
   getDeviceBalance,
   formatDeviceBalance
-} from './device-credits';
+} from '../billing/device-credits';
 
 /**
  * CORS headers for all responses

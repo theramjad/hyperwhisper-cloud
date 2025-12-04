@@ -11,9 +11,9 @@
 // - Both device credits AND IP quota must have sufficient balance
 // - Deductions happen against both pools
 
-import { Logger } from './logger';
-import { CREDITS_PER_MINUTE, TRIAL_CREDIT_ALLOCATION } from './constants/credits';
-import { roundToTenth } from './utils';
+import { Logger } from '../utils/logger';
+import { CREDITS_PER_MINUTE, TRIAL_CREDIT_ALLOCATION } from '../constants/credits';
+import { roundToTenth } from '../utils/utils';
 
 // Configuration
 const INITIAL_DEVICE_CREDITS = TRIAL_CREDIT_ALLOCATION; // One-time allocation for new devices

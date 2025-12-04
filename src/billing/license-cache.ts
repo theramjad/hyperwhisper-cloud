@@ -11,7 +11,7 @@
 // - Faster response times (no API latency)
 // - Stays within Polar rate limits (100 req/s, 300 req/min)
 
-import { Logger } from './logger';
+import { Logger } from '../utils/logger';
 
 // Cache configuration
 const VALID_LICENSE_TTL = 7 * 24 * 60 * 60; // 7 days in seconds
