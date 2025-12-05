@@ -18,6 +18,10 @@ export class Logger {
     return Date.now() - this.startTime;
   }
 
+  getRequestId(): string {
+    return this.requestId;
+  }
+
   log(level: 'info' | 'warn' | 'error', message: string, data?: Record<string, any>) {
     const logEntry: Record<string, unknown> = {
       timestamp: new Date().toISOString(),
