@@ -28,8 +28,9 @@ export interface TranscriptionRequest {
   initial_prompt?: string;    // Optional initial prompt/custom vocabulary for Whisper
 }
 
-// WHISPER API RESPONSE
-// Structure returned from Cloudflare's Whisper model
+// TRANSCRIPTION SEGMENT
+// Used for utterance/segment data in transcription responses
+// Compatible format used by Deepgram utterances converted to segment format
 export interface WhisperSegment {
   id?: number;
   start: number;
@@ -40,14 +41,6 @@ export interface WhisperSegment {
   compression_ratio?: number;
   no_speech_prob?: number;
   tokens?: number[];
-}
-
-export interface WhisperResponse {
-  text?: string;
-  language?: string;
-  duration?: number;
-  segments?: WhisperSegment[];
-  task?: string;
 }
 
 export interface GroqUsage {

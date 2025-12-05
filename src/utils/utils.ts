@@ -1,5 +1,5 @@
 // UTILITY FUNCTIONS
-// General-purpose helpers for type guards, parsing, and base64 operations
+// General-purpose helpers for type guards, parsing, and retry operations
 
 /**
  * Type guard for plain object values
@@ -27,22 +27,6 @@ export function parseBoolean(value: unknown): boolean | undefined {
   }
 
   return undefined;
-}
-
-/**
- * Decode a base64 string into a Uint8Array
- */
-export function base64ToUint8Array(value: string): Uint8Array {
-  const normalized = value.replace(/\s+/g, '');
-  const binaryString = atob(normalized);
-  const length = binaryString.length;
-  const bytes = new Uint8Array(length);
-
-  for (let i = 0; i < length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-
-  return bytes;
 }
 
 /**
