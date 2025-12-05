@@ -549,17 +549,20 @@ export async function transcribeWithDeepgramStream(
   // The magic happens here: fetch() accepts ReadableStream as body
   // Cloudflare pipes the data through without buffering
   //
-  // CONTENT-LENGTH FORWARDING:
-  // We forward the original Content-Length header to Deepgram. This is critical
-  // for large files (>10MB) because without it, chunked transfer encoding is used,
-  // which can cause Deepgram to return 422 "Unable to read the entire client request"
-  // errors when the stream doesn't complete cleanly.
+  // NO MANUAL CONTENT-LENGTH:
+  // We do NOT set Content-Length manually because:
+  // 1. Cloudflare Workers overrides it when body is a ReadableStream
+  // 2. Workers uses Transfer-Encoding: chunked for streams
+  // 3. Setting both Content-Length AND chunked violates HTTP spec (RFC 2616)
+  // 4. This caused Deepgram 422 errors and "Pending" status hangs
+  //
+  // Let Cloudflare handle the encoding - Deepgram should accept chunked transfer.
+  // The legacy endpoint (ArrayBuffer body) works without explicit Content-Length.
   const deepgramResponse = await fetch(url, {
     method: 'POST',
     headers: {
       'Authorization': `Token ${env.DEEPGRAM_API_KEY}`,
       'Content-Type': contentType,
-      'Content-Length': String(contentLength),
     },
     body: audioBody,
   });
@@ -634,5 +637,145 @@ export async function transcribeWithDeepgramStream(
     costUsd,
     requestId: responseJson.metadata?.request_id,
     source: 'deepgram_nova3',
+  };
+}
+
+// ============================================================================
+// URL-BASED TRANSCRIPTION FUNCTION (FOR LARGE FILES VIA R2)
+// ============================================================================
+
+/**
+ * URL-BASED TRANSCRIPTION FUNCTION
+ * Sends a URL to Deepgram instead of audio data
+ *
+ * USE CASE:
+ * For large files (>30MB), we upload to R2 first, then give Deepgram the URL.
+ * This bypasses Cloudflare Worker streaming issues entirely.
+ *
+ * HOW IT WORKS:
+ * 1. Audio is already in R2 with a presigned URL
+ * 2. We send JSON body {"url": "https://..."} to Deepgram
+ * 3. Deepgram fetches the audio directly from R2
+ * 4. Same query parameters work (model, language, keyterm, etc.)
+ *
+ * KEY DIFFERENCE FROM STREAMING:
+ * - Content-Type: application/json (not audio/*)
+ * - Body: {"url": "..."} (not raw audio bytes)
+ * - Deepgram fetches the audio itself
+ *
+ * @param audioUrl - Presigned R2 URL where Deepgram can fetch the audio
+ * @param language - ISO language code or "auto" for detection
+ * @param initialPrompt - Optional comma-separated vocabulary terms
+ * @param env - Environment variables including DEEPGRAM_API_KEY
+ * @param logger - Logger instance for request tracking
+ * @returns StreamingTranscriptionResult with text, language, duration, cost
+ */
+export async function transcribeWithDeepgramUrl(
+  audioUrl: string,
+  language: string | undefined,
+  initialPrompt: string | undefined,
+  env: Env,
+  logger: Logger
+): Promise<StreamingTranscriptionResult> {
+  // STEP 1: Convert vocabulary terms to Deepgram keyterm format
+  const keywords = initialPrompt
+    ? convertInitialPromptToKeywords(initialPrompt)
+    : '';
+
+  // STEP 2: Build URL with query parameters (same as streaming)
+  const url = buildDeepgramUrl(language, keywords);
+
+  // Determine vocabulary boosting method for logging
+  const isMonolingual = language && language.toLowerCase() !== 'auto';
+  const vocabularyMethod = (keywords.length > 0 && isMonolingual) ? 'keyterm' : 'none';
+
+  // Log request details
+  logger.log('info', 'Dispatching URL-based Deepgram transcription', {
+    endpoint: url,
+    model: DEEPGRAM_MODEL,
+    audioUrl: audioUrl.substring(0, 80) + '...', // Truncate for logging
+    language: language || 'auto',
+    languageMode: isMonolingual ? 'monolingual' : 'multilingual',
+    vocabularyMethod,
+    vocabularyTermCount: keywords ? keywords.split(',').length : 0,
+  });
+
+  // STEP 3: Send POST request with JSON body containing URL
+  // KEY DIFFERENCE: Content-Type is application/json, not audio/*
+  // Body is {"url": "..."} instead of raw audio bytes
+  const deepgramResponse = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Token ${env.DEEPGRAM_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ url: audioUrl }),
+  });
+
+  // Handle API errors
+  if (!deepgramResponse.ok) {
+    const errorText = await safeReadText(deepgramResponse);
+    logger.log('error', 'URL-based Deepgram transcription failed', {
+      status: deepgramResponse.status,
+      statusText: deepgramResponse.statusText,
+      endpoint: url,
+      errorText,
+    });
+
+    if (deepgramResponse.status === 401) {
+      throw new Error('Deepgram API key is invalid or expired');
+    }
+    if (deepgramResponse.status === 402) {
+      throw new Error('Deepgram account has insufficient funds');
+    }
+    if (deepgramResponse.status === 429) {
+      throw new Error('Deepgram rate limit exceeded (max 100 concurrent requests)');
+    }
+
+    throw new Error(`Deepgram transcription failed with status ${deepgramResponse.status}`);
+  }
+
+  // STEP 4: Parse response (identical to streaming version)
+  const responseJson = (await deepgramResponse.json()) as DeepgramResponse;
+
+  const channel = responseJson.results?.channels?.[0];
+  const alternative = channel?.alternatives?.[0];
+  const transcript = alternative?.transcript || '';
+
+  if (!transcript || transcript.trim().length === 0) {
+    logger.log('info', 'No speech detected in URL-based audio', {
+      deepgramRequestId: responseJson.metadata?.request_id,
+      duration: responseJson.metadata?.duration,
+    });
+
+    return {
+      text: '',
+      language: channel?.detected_language,
+      durationSeconds: 0,
+      costUsd: 0,
+      requestId: responseJson.metadata?.request_id,
+      source: 'no_speech',
+    };
+  }
+
+  const durationSeconds = responseJson.metadata?.duration ?? 0;
+  const costUsd = computeDeepgramTranscriptionCost(durationSeconds);
+
+  logger.log('info', 'URL-based Deepgram transcription successful', {
+    deepgramRequestId: responseJson.metadata?.request_id,
+    durationSeconds,
+    detectedLanguage: channel?.detected_language,
+    languageConfidence: channel?.language_confidence,
+    transcriptLength: transcript.length,
+    costUsd,
+  });
+
+  return {
+    text: transcript,
+    language: channel?.detected_language,
+    durationSeconds,
+    costUsd,
+    requestId: responseJson.metadata?.request_id,
+    source: 'deepgram_nova3_url',
   };
 }

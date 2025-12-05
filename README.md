@@ -39,19 +39,35 @@ Built on Cloudflare Workers for global edge computing with zero cold starts.
 - **Runtime**: Cloudflare Workers (V8 isolates)
 - **Transcription**: Deepgram Nova-3 ($0.0043/min)
 - **Post-processing**: Groq Llama 3.3 70B (typo correction)
-- **Storage**: Cloudflare KV (credits only)
+- **Storage**: Cloudflare KV (credits only), R2 (temporary large file storage)
 - **Language**: TypeScript
 
 ### Request Flow
 ```
-1. Client uploads audio (multipart/form-data)
+Small files (<30MB):
+1. Client streams audio directly
 2. Worker validates credits (device or license)
-3. Audio sent to Deepgram for transcription
-4. Text sent to Groq for post-processing
-5. Credits deducted, balance returned
-6. Response sent to client
-7. Audio immediately deleted
+3. Audio streamed to Deepgram for transcription
+4. Text sent to Groq for post-processing (optional)
+5. Credits deducted, response sent to client
+
+Large files (>=30MB):
+1. Client streams audio
+2. Worker validates credits
+3. Audio uploaded to R2 (temporary storage)
+4. Deepgram fetches from R2 via presigned URL
+5. R2 file deleted immediately after transcription
+6. Text sent to Groq for post-processing (optional)
+7. Credits deducted, response sent to client
 ```
+
+### Large File Handling (R2)
+Files >=30MB use Cloudflare R2 for temporary storage. This is required because Cloudflare Workers uses `Transfer-Encoding: chunked` when streaming large request bodies, which Deepgram cannot reliably process (causes 422 errors and timeouts). By uploading to R2 first, Deepgram can fetch the complete file directly via presigned URL.
+
+- **Temporary storage**: Files deleted immediately after transcription
+- **Presigned URLs**: 15-minute expiry, Deepgram fetches directly
+- **Lifecycle rules**: Auto-delete after 1 day (failsafe)
+- **No permanent storage**: Audio never persists
 
 ## Credit System
 
@@ -195,6 +211,11 @@ curl -X POST http://localhost:8787/ \
 - `DEVICE_CREDITS`: Trial credit balances
 - `RATE_LIMITER`: IP daily quotas
 - `LICENSE_CACHE`: License validation cache
+
+### R2 Buckets
+- `AUDIO_BUCKET`: Temporary audio storage for large files (>=30MB)
+  - Dev: `hyperwhisper-audio-temp-dev`
+  - Prod: `hyperwhisper-audio-temp-prod`
 
 All configured in `wrangler.toml` with environment-specific bindings.
 

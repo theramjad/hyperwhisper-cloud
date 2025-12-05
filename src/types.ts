@@ -11,6 +11,16 @@ export interface Env {
   POLAR_ACCESS_TOKEN: string; // Polar.sh API token (required)
   POLAR_ORGANIZATION_ID: string; // Polar.sh organization ID (required)
   POLAR_METER_ID: string; // Polar.sh meter ID for transcription credits
+
+  // R2 bucket for temporary audio storage (large file transcription >30MB)
+  // Files are uploaded to R2, Deepgram fetches via presigned URL, then deleted
+  AUDIO_BUCKET: R2Bucket;
+
+  // R2 API credentials for presigned URL generation
+  // Required for Deepgram to fetch audio from R2 via signed URLs
+  R2_ACCESS_KEY_ID: string;
+  R2_SECRET_ACCESS_KEY: string;
+  R2_ACCOUNT_ID: string; // Cloudflare account ID (visible in dashboard URL)
 }
 
 // TRANSCRIPTION REQUEST

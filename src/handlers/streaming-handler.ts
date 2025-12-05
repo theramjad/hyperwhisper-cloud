@@ -20,7 +20,17 @@ import type { Env, StreamingTranscriptionResponse } from '../types';
 import { Logger } from '../utils/logger';
 import { roundToTenth, roundUpToTenth, retryWithBackoff } from '../utils/utils';
 import { getCORSHeaders } from '../middleware/handlers';
-import { transcribeWithDeepgramStream } from '../api/deepgram-client';
+import {
+  transcribeWithDeepgramStream,
+  transcribeWithDeepgramUrl,
+  StreamingTranscriptionResult,
+} from '../api/deepgram-client';
+import {
+  uploadToR2,
+  generateR2PresignedUrl,
+  deleteFromR2,
+  generateR2Key,
+} from '../utils/r2-utils';
 import { formatUsd } from '../billing/cost-calculator';
 import {
   createPolarClient,
@@ -51,6 +61,17 @@ import { CREDITS_PER_MINUTE, TRIAL_CREDIT_ALLOCATION } from '../constants/credit
 // Most compressed audio (m4a, mp3, aac) is ~128kbps = 16KB/sec
 // This means ~1MB ≈ 60 seconds of audio
 const BYTES_PER_MINUTE_ESTIMATE = 1024 * 1024; // 1MB per minute (conservative)
+
+// LARGE FILE THRESHOLD FOR R2 UPLOAD PATH
+// Files larger than this will be uploaded to R2 first, then Deepgram fetches via URL.
+// This bypasses Cloudflare Worker streaming issues with large files.
+//
+// WHY 30MB:
+// - Cloudflare Worker streaming fails for large files (>30MB) with Deepgram
+// - Most microphone recordings are <10MB (a few minutes)
+// - File imports (podcasts, lectures) can be 50-200MB
+// - 30MB provides safety margin while keeping small files fast (no R2 overhead)
+const LARGE_FILE_THRESHOLD = 30 * 1024 * 1024; // 30MB
 
 /**
  * ESTIMATE CREDITS FROM CONTENT-LENGTH
@@ -403,13 +424,10 @@ export async function handleStreamingTranscription(
     }
 
     // ========================================================================
-    // STEP 9: Stream audio to Deepgram (with retry)
+    // STEP 9: Transcribe audio (hybrid approach based on file size)
     // ========================================================================
     const sttStartTime = Date.now();
 
-    // NOTE: We can only retry with ArrayBuffer, not ReadableStream (streams are one-shot)
-    // For streaming, we rely on Deepgram's reliability
-    // If retry is needed, the stream must be re-read from the client
     const audioBody = request.body;
 
     if (!audioBody) {
@@ -423,15 +441,109 @@ export async function handleStreamingTranscription(
       });
     }
 
-    const transcriptionResult = await transcribeWithDeepgramStream(
-      audioBody,
-      contentType,
-      contentLength,  // Forward Content-Length to Deepgram for reliable streaming
-      language,
-      initialPrompt,
-      env,
-      logger
-    );
+    // HYBRID TRANSCRIPTION APPROACH:
+    // - Small files (<30MB): Stream directly to Deepgram (faster, no R2 overhead)
+    // - Large files (>=30MB): Upload to R2, use URL-based transcription (reliable)
+    //
+    // WHY:
+    // Cloudflare Workers uses Transfer-Encoding: chunked for ReadableStream bodies,
+    // which causes Deepgram to fail with 422 errors for large files.
+    // R2 + URL-based transcription bypasses this entirely.
+
+    let transcriptionResult: StreamingTranscriptionResult;
+
+    if (contentLength >= LARGE_FILE_THRESHOLD) {
+      // ====================================================================
+      // LARGE FILE PATH: R2 upload + URL-based transcription
+      // ====================================================================
+      logger.log('info', 'Large file detected, using R2 upload path', {
+        contentLength,
+        contentLengthMB: (contentLength / (1024 * 1024)).toFixed(2),
+        threshold: LARGE_FILE_THRESHOLD,
+      });
+
+      // Generate unique key for this audio file
+      const r2Key = generateR2Key(contentType);
+
+      try {
+        // STEP 9a: Upload audio stream to R2 (streams without buffering)
+        await uploadToR2(
+          env.AUDIO_BUCKET,
+          r2Key,
+          audioBody as ReadableStream<Uint8Array>,
+          contentType
+        );
+
+        logger.log('info', 'Audio uploaded to R2', { r2Key });
+
+        // STEP 9b: Generate presigned URL for Deepgram to fetch
+        // Note: We need to get bucket name from wrangler.toml config
+        // Since R2Bucket binding doesn't expose the name, we derive it from environment
+        const bucketName = (env as any).ENVIRONMENT === 'production'
+          ? 'hyperwhisper-audio-temp-prod'
+          : 'hyperwhisper-audio-temp-dev';
+
+        const presignedUrl = await generateR2PresignedUrl(
+          env.R2_ACCOUNT_ID,
+          env.R2_ACCESS_KEY_ID,
+          env.R2_SECRET_ACCESS_KEY,
+          bucketName,
+          r2Key,
+          15 * 60 // 15 minute expiry
+        );
+
+        logger.log('info', 'Generated presigned URL for Deepgram', {
+          r2Key,
+          expiresInMinutes: 15,
+        });
+
+        // STEP 9c: Send URL to Deepgram (Deepgram fetches from R2)
+        transcriptionResult = await transcribeWithDeepgramUrl(
+          presignedUrl,
+          language,
+          initialPrompt,
+          env,
+          logger
+        );
+
+        // STEP 9d: Clean up R2 file after transcription (non-blocking)
+        ctx.waitUntil(
+          deleteFromR2(env.AUDIO_BUCKET, r2Key).catch(err => {
+            logger.log('warn', 'Failed to delete R2 file (will be auto-deleted by lifecycle rule)', {
+              r2Key,
+              error: String(err),
+            });
+          })
+        );
+
+      } catch (error) {
+        // Attempt cleanup on error (non-blocking)
+        ctx.waitUntil(
+          deleteFromR2(env.AUDIO_BUCKET, r2Key).catch(() => {})
+        );
+        throw error;
+      }
+
+    } else {
+      // ====================================================================
+      // SMALL FILE PATH: Direct streaming to Deepgram
+      // ====================================================================
+      logger.log('info', 'Small file, using direct streaming path', {
+        contentLength,
+        contentLengthMB: (contentLength / (1024 * 1024)).toFixed(2),
+        threshold: LARGE_FILE_THRESHOLD,
+      });
+
+      transcriptionResult = await transcribeWithDeepgramStream(
+        audioBody,
+        contentType,
+        contentLength,
+        language,
+        initialPrompt,
+        env,
+        logger
+      );
+    }
 
     const sttLatencyMs = Date.now() - sttStartTime;
 

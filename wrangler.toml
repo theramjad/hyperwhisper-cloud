@@ -29,6 +29,11 @@ id = "88623c47392f43d183b5f041fa1566ba"
 binding = "LICENSE_CACHE"
 id = "6e863d08932c45bc9063e60cdf1f5015"
 
+# Development R2 bucket for temporary audio storage (large file transcription)
+[[env.development.r2_buckets]]
+binding = "AUDIO_BUCKET"
+bucket_name = "hyperwhisper-audio-temp-dev"
+
 # Development custom domain
 [[env.development.routes]]
 pattern = "transcribe-dev-v1.hyperwhisper.com"
@@ -60,6 +65,11 @@ id = "36019fbb98194feda455b1c39e47e492"
 [[env.production.kv_namespaces]]
 binding = "LICENSE_CACHE"
 id = "c24a0bf339dd415ba3f669e81923e310"
+
+# Production R2 bucket for temporary audio storage (large file transcription)
+[[env.production.r2_buckets]]
+binding = "AUDIO_BUCKET"
+bucket_name = "hyperwhisper-audio-temp-prod"
 
 # Production custom domain
 [[env.production.routes]]
