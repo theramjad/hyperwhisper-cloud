@@ -491,13 +491,20 @@ export type StreamingTranscriptionResult = {
  * 1. ReadableStream<Uint8Array> - Direct stream pass-through (0 memory)
  * 2. ArrayBuffer - For smaller files or when stream isn't available
  *
+ * CONTENT-LENGTH FORWARDING:
+ * When streaming large files, Deepgram needs the Content-Length header to
+ * properly handle the request. Without it, chunked transfer encoding is used,
+ * which can cause "Unable to read the entire client request" errors for large files.
+ * The contentLength parameter allows forwarding the original request's Content-Length.
+ *
  * FLOW:
  * 1. Build Deepgram URL with query parameters
- * 2. Pass audio stream/buffer directly to Deepgram
+ * 2. Pass audio stream/buffer directly to Deepgram with Content-Length
  * 3. Parse response and return simplified result
  *
  * @param audioBody - ReadableStream or ArrayBuffer of audio data
  * @param contentType - MIME type of the audio (e.g., "audio/mp4")
+ * @param contentLength - Size of the audio in bytes (for Content-Length header)
  * @param language - ISO language code or "auto" for detection
  * @param initialPrompt - Optional comma-separated vocabulary terms
  * @param env - Environment variables including DEEPGRAM_API_KEY
@@ -507,6 +514,7 @@ export type StreamingTranscriptionResult = {
 export async function transcribeWithDeepgramStream(
   audioBody: ReadableStream<Uint8Array> | ArrayBuffer,
   contentType: string,
+  contentLength: number,
   language: string | undefined,
   initialPrompt: string | undefined,
   env: Env,
@@ -529,6 +537,7 @@ export async function transcribeWithDeepgramStream(
     endpoint: url,
     model: DEEPGRAM_MODEL,
     contentType,
+    contentLength,
     language: language || 'auto',
     languageMode: isMonolingual ? 'monolingual' : 'multilingual',
     vocabularyMethod,
@@ -539,11 +548,18 @@ export async function transcribeWithDeepgramStream(
   // STEP 3: Send POST request with stream/buffer body
   // The magic happens here: fetch() accepts ReadableStream as body
   // Cloudflare pipes the data through without buffering
+  //
+  // CONTENT-LENGTH FORWARDING:
+  // We forward the original Content-Length header to Deepgram. This is critical
+  // for large files (>10MB) because without it, chunked transfer encoding is used,
+  // which can cause Deepgram to return 422 "Unable to read the entire client request"
+  // errors when the stream doesn't complete cleanly.
   const deepgramResponse = await fetch(url, {
     method: 'POST',
     headers: {
       'Authorization': `Token ${env.DEEPGRAM_API_KEY}`,
       'Content-Type': contentType,
+      'Content-Length': String(contentLength),
     },
     body: audioBody,
   });

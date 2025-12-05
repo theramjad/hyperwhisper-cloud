@@ -426,6 +426,7 @@ export async function handleStreamingTranscription(
     const transcriptionResult = await transcribeWithDeepgramStream(
       audioBody,
       contentType,
+      contentLength,  // Forward Content-Length to Deepgram for reliable streaming
       language,
       initialPrompt,
       env,
