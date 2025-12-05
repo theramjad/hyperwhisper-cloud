@@ -140,3 +140,44 @@ export interface DeepgramUtterance {
   speaker?: number; // Speaker ID (when diarize=true)
   id?: string; // Utterance ID
 }
+
+// ============================================================================
+// STREAMING ENDPOINT TYPES
+// ============================================================================
+
+// STREAMING TRANSCRIPTION RESPONSE
+// Simplified response for POST /transcribe endpoint
+// Designed for zero-buffer streaming from client
+export interface StreamingTranscriptionResponse {
+  text: string; // Transcribed text
+  language?: string; // Detected or specified language code
+  duration: number; // Audio duration in seconds
+  cost: {
+    usd: number; // Cost in USD
+    credits: number; // Credits charged
+  };
+  metadata: {
+    request_id: string; // Unique request identifier
+    stt_provider: string; // Always "deepgram-nova3"
+  };
+  no_speech_detected?: boolean; // True if no speech was found
+}
+
+// POST-PROCESS REQUEST
+// JSON body for POST /post-process endpoint
+export interface PostProcessRequest {
+  text: string; // Raw transcription to process
+  prompt: string; // System prompt for correction
+  license_key?: string; // Licensed user auth
+  device_id?: string; // Trial user auth
+}
+
+// POST-PROCESS RESPONSE
+// Response from POST /post-process endpoint
+export interface PostProcessResponse {
+  corrected: string; // Post-processed text
+  cost: {
+    usd: number; // Cost in USD
+    credits: number; // Credits charged
+  };
+}

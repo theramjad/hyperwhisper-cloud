@@ -141,7 +141,8 @@ export async function transcribeWithGroq(
   const { mimeType, extension } = normalizeMimeType(requestData.audioMimeType, requestData.audioFileName);
   const fileName = resolveFileName(requestData.audioFileName, extension);
 
-  const audioBytes = base64ToUint8Array(requestData.audio);
+  // Audio is now passed as raw Uint8Array from index.ts (no longer base64)
+  const audioBytes = requestData.audio;
   const audioBuffer = new ArrayBuffer(audioBytes.byteLength);
   new Uint8Array(audioBuffer).set(audioBytes);
 

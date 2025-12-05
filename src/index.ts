@@ -56,6 +56,10 @@ import {
   formatRateLimitHeaders,
 } from './middleware/rate-limiter';
 
+// Handlers (new streaming endpoints)
+import { handleStreamingTranscription } from './handlers/streaming-handler';
+import { handlePostProcess } from './handlers/post-process-handler';
+
 // Constants
 import { CREDITS_PER_MINUTE, TRIAL_CREDIT_ALLOCATION } from './constants/credits';
 
@@ -90,7 +94,33 @@ export default {
       return handleUsageQuery(url, env, logger, clientIP);
     }
 
-    // ROUTE: POST / - Transcribe audio
+    // ========================================================================
+    // NEW STREAMING ENDPOINTS
+    // These endpoints use zero-buffer streaming to handle large audio files
+    // without hitting Cloudflare Worker memory limits (128MB)
+    // ========================================================================
+
+    // ROUTE: POST /transcribe - Streaming audio transcription
+    // Pipes raw binary audio directly to Deepgram without buffering
+    // Query params: license_key OR device_id, language, mode, initial_prompt
+    // Headers: Content-Type: audio/*, Content-Length: required
+    if (request.method === 'POST' && url.pathname === '/transcribe') {
+      return handleStreamingTranscription(request, env, ctx, logger, clientIP);
+    }
+
+    // ROUTE: POST /post-process - Standalone text correction
+    // Applies Groq Llama post-processing to any text (not tied to /transcribe)
+    // Body: { text: string, prompt: string, license_key OR device_id }
+    if (request.method === 'POST' && url.pathname === '/post-process') {
+      return handlePostProcess(request, env, ctx, logger, clientIP);
+    }
+
+    // ========================================================================
+    // LEGACY ENDPOINT (backwards compatible for versions earlier than v2.12.0)
+    // ========================================================================
+
+    // ROUTE: POST / - Legacy multipart transcription (buffered)
+    // Kept for backwards compatibility with older client versions
     if (request.method !== 'POST') {
       logger.log('warn', 'Invalid method', { method: request.method });
       return new Response('Method not allowed', {

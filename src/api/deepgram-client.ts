@@ -158,11 +158,12 @@ function convertInitialPromptToKeywords(initialPrompt: string): string {
     return '';
   }
 
-  // Format as "term1:intensifier,term2:intensifier"
+  // KEYTERM FORMAT (Nova-3):
+  // Plain strings WITHOUT intensifiers - just comma-separated terms
+  // Example: "term1,term2,term3"
+  // Unlike old 'keywords' parameter, keyterms don't use :1.5 suffix
   // NOTE: Don't URL-encode here - URLSearchParams.set() handles encoding automatically
-  return terms
-    .map(t => `${t}:${DEFAULT_KEYWORD_INTENSIFIER}`)
-    .join(',');
+  return terms.join(',');
 }
 
 /**
@@ -268,29 +269,19 @@ function buildDeepgramUrl(language: string | undefined, vocabularyTerms: string)
   }
 
   // VOCABULARY BOOSTING FOR NOVA-3:
-  // Nova-3 ONLY supports 'keyterm' parameter (not 'keywords')
+  // Nova-3 uses 'keyterm' parameter (NOT 'keywords' - that's for older models)
   //
-  // KEYTERM REQUIREMENTS:
-  // - Only works when language is explicitly specified (monolingual mode)
-  // - When detect_language=true, keyterm is SILENTLY IGNORED by Deepgram
-  // - Provides up to 90% improvement in Keyword Recall Rate (KRR)
+  // KEYTERM PROMPTING:
+  // - Works with BOTH monolingual and multilingual transcription
+  // - Up to 90% improvement in Keyword Recall Rate (KRR)
+  // - No intensifiers needed (plain strings, not term:1.5 format)
+  // - Max 500 tokens total, recommended 20-50 terms for best results
   //
-  // NOVA-3 DOES NOT SUPPORT 'keywords' PARAMETER:
-  // - Attempting to use 'keywords' with Nova-3 returns 400 error
-  // - Error message: "Keywords are not supported for Nova-3. Please use `keyterm` instead."
-  //
-  // BEHAVIOR:
-  // - Monolingual (language explicitly specified): Use 'keyterm' for 90% KRR boost
-  // - Multilingual (language "auto" or auto-detect): No vocabulary parameter
-  //   (keyterm would be ignored, keywords is rejected by Nova-3)
-  //
-  // Reference: Deepgram Keyterm Prompting docs - "Monolingual Only"
-  if (vocabularyTerms.length > 0 && isMonolingual) {
-    // Nova-3 with explicit language: Use 'keyterm' for 90% KRR improvement
+  // Reference: https://developers.deepgram.com/docs/keyterm
+  // "Keyterm Prompting is available for both monolingual and multilingual transcription"
+  if (vocabularyTerms.length > 0) {
     params.set('keyterm', vocabularyTerms);
   }
-  // Note: When language=auto (multilingual), we don't add any vocabulary parameter
-  // because Nova-3 doesn't support 'keywords' and 'keyterm' is ignored with detect_language=true
 
   return `${DEEPGRAM_API_URL}?${params.toString()}`;
 }
@@ -466,5 +457,166 @@ export async function transcribeWithDeepgram(
     language: channel?.detected_language,
     segments,
     costUsd,
+  };
+}
+
+// ============================================================================
+// STREAMING TRANSCRIPTION FUNCTION
+// ============================================================================
+
+/**
+ * STREAMING TRANSCRIPTION RESULT
+ * Simplified response type for the /transcribe streaming endpoint
+ */
+export type StreamingTranscriptionResult = {
+  text: string;
+  language?: string;
+  durationSeconds: number;
+  costUsd: number;
+  requestId?: string;
+  source: string;
+};
+
+/**
+ * STREAMING TRANSCRIPTION FUNCTION
+ * Pipes audio stream directly to Deepgram without buffering
+ *
+ * KEY MEMORY OPTIMIZATION:
+ * In Cloudflare Workers, `request.body` is a `ReadableStream<Uint8Array>`.
+ * When passed directly to `fetch(url, { body: request.body })`, it pipes
+ * through without loading into memory. This reduces memory usage from
+ * ~34MB (2x file size) to ~0MB for large files.
+ *
+ * This function accepts:
+ * 1. ReadableStream<Uint8Array> - Direct stream pass-through (0 memory)
+ * 2. ArrayBuffer - For smaller files or when stream isn't available
+ *
+ * FLOW:
+ * 1. Build Deepgram URL with query parameters
+ * 2. Pass audio stream/buffer directly to Deepgram
+ * 3. Parse response and return simplified result
+ *
+ * @param audioBody - ReadableStream or ArrayBuffer of audio data
+ * @param contentType - MIME type of the audio (e.g., "audio/mp4")
+ * @param language - ISO language code or "auto" for detection
+ * @param initialPrompt - Optional comma-separated vocabulary terms
+ * @param env - Environment variables including DEEPGRAM_API_KEY
+ * @param logger - Logger instance for request tracking
+ * @returns StreamingTranscriptionResult with text, language, duration, cost
+ */
+export async function transcribeWithDeepgramStream(
+  audioBody: ReadableStream<Uint8Array> | ArrayBuffer,
+  contentType: string,
+  language: string | undefined,
+  initialPrompt: string | undefined,
+  env: Env,
+  logger: Logger
+): Promise<StreamingTranscriptionResult> {
+  // STEP 1: Convert vocabulary terms to Deepgram keyterm format
+  const keywords = initialPrompt
+    ? convertInitialPromptToKeywords(initialPrompt)
+    : '';
+
+  // STEP 2: Build URL with query parameters
+  const url = buildDeepgramUrl(language, keywords);
+
+  // Determine vocabulary boosting method for logging
+  const isMonolingual = language && language.toLowerCase() !== 'auto';
+  const vocabularyMethod = (keywords.length > 0 && isMonolingual) ? 'keyterm' : 'none';
+
+  // Log request details
+  logger.log('info', 'Dispatching streaming Deepgram transcription', {
+    endpoint: url,
+    model: DEEPGRAM_MODEL,
+    contentType,
+    language: language || 'auto',
+    languageMode: isMonolingual ? 'monolingual' : 'multilingual',
+    vocabularyMethod,
+    vocabularyTermCount: keywords ? keywords.split(',').length : 0,
+    isStreaming: audioBody instanceof ReadableStream,
+  });
+
+  // STEP 3: Send POST request with stream/buffer body
+  // The magic happens here: fetch() accepts ReadableStream as body
+  // Cloudflare pipes the data through without buffering
+  const deepgramResponse = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Token ${env.DEEPGRAM_API_KEY}`,
+      'Content-Type': contentType,
+    },
+    body: audioBody,
+  });
+
+  // Handle API errors
+  if (!deepgramResponse.ok) {
+    const errorText = await safeReadText(deepgramResponse);
+    logger.log('error', 'Streaming Deepgram transcription failed', {
+      status: deepgramResponse.status,
+      statusText: deepgramResponse.statusText,
+      endpoint: url,
+      errorText,
+    });
+
+    // Provide specific error messages for known status codes
+    if (deepgramResponse.status === 401) {
+      throw new Error('Deepgram API key is invalid or expired');
+    }
+    if (deepgramResponse.status === 402) {
+      throw new Error('Deepgram account has insufficient funds');
+    }
+    if (deepgramResponse.status === 429) {
+      throw new Error('Deepgram rate limit exceeded (max 100 concurrent requests)');
+    }
+
+    throw new Error(`Deepgram transcription failed with status ${deepgramResponse.status}`);
+  }
+
+  // STEP 4: Parse response
+  const responseJson = (await deepgramResponse.json()) as DeepgramResponse;
+
+  // Extract transcript from nested response structure
+  const channel = responseJson.results?.channels?.[0];
+  const alternative = channel?.alternatives?.[0];
+  const transcript = alternative?.transcript || '';
+
+  // NO SPEECH DETECTED:
+  // Return empty result with source='no_speech' for client to handle gracefully
+  if (!transcript || transcript.trim().length === 0) {
+    logger.log('info', 'No speech detected in streaming audio', {
+      deepgramRequestId: responseJson.metadata?.request_id,
+      duration: responseJson.metadata?.duration,
+    });
+
+    return {
+      text: '',
+      language: channel?.detected_language,
+      durationSeconds: 0,
+      costUsd: 0,
+      requestId: responseJson.metadata?.request_id,
+      source: 'no_speech',
+    };
+  }
+
+  // Calculate duration and cost
+  const durationSeconds = responseJson.metadata?.duration ?? 0;
+  const costUsd = computeDeepgramTranscriptionCost(durationSeconds);
+
+  logger.log('info', 'Streaming Deepgram transcription successful', {
+    deepgramRequestId: responseJson.metadata?.request_id,
+    durationSeconds,
+    detectedLanguage: channel?.detected_language,
+    languageConfidence: channel?.language_confidence,
+    transcriptLength: transcript.length,
+    costUsd,
+  });
+
+  return {
+    text: transcript,
+    language: channel?.detected_language,
+    durationSeconds,
+    costUsd,
+    requestId: responseJson.metadata?.request_id,
+    source: 'deepgram_nova3',
   };
 }
