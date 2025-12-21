@@ -6,8 +6,10 @@ import { Logger } from '../utils/logger';
 import { getUsageStats } from './rate-limiter';
 import {
   validateAndGetCredits,
+  getCreditsBalance,
   formatMeterBalance
 } from '../billing/billing';
+import { getLicenseFromCache } from '../billing/license-cache';
 import {
   getDeviceBalance,
   formatDeviceBalance
@@ -67,18 +69,74 @@ export async function handleUsageQuery(
     const { licenseKey, deviceId } = resolved;
 
     if (licenseKey) {
-      // LICENSED USER: Query Next.js API for credit balance
+      // LICENSED USER: Query credit balance
       logger.log('info', 'Usage query for licensed user', { forceRefresh });
 
-      // Validate license and get credit balance (with cache, unless forceRefresh)
-      const { isValid, credits } = await validateAndGetCredits(
-        env.LICENSE_CACHE,
-        licenseKey,
-        env.HYPERWHISPER_API_URL,
-        env.HYPERWHISPER_API_KEY,
-        logger,
-        forceRefresh
-      );
+      let isValid: boolean;
+      let credits: number;
+
+      // OPTIMIZATION: If force refresh AND license is already cached as valid,
+      // use the lightweight getCreditsBalance endpoint instead of full validation.
+      // This skips device tracking and Polar fallback for faster response.
+      if (forceRefresh) {
+        const cached = await getLicenseFromCache(env.LICENSE_CACHE, licenseKey, logger);
+
+        if (cached?.isValid) {
+          // License already validated - just fetch fresh balance
+          logger.log('info', 'Using lightweight balance endpoint (cached valid license)');
+          const balanceResult = await getCreditsBalance(
+            env.LICENSE_CACHE,
+            licenseKey,
+            env.HYPERWHISPER_API_URL,
+            env.HYPERWHISPER_API_KEY,
+            logger
+          );
+
+          if (balanceResult.error) {
+            // Balance fetch failed - could be license revoked, fall back to validation
+            logger.log('warn', 'Balance fetch failed, falling back to validation', {
+              error: balanceResult.error
+            });
+            const validation = await validateAndGetCredits(
+              env.LICENSE_CACHE,
+              licenseKey,
+              env.HYPERWHISPER_API_URL,
+              env.HYPERWHISPER_API_KEY,
+              logger,
+              true // forceRefresh
+            );
+            isValid = validation.isValid;
+            credits = validation.credits;
+          } else {
+            isValid = true;
+            credits = balanceResult.credits;
+          }
+        } else {
+          // No valid cache - do full validation
+          const validation = await validateAndGetCredits(
+            env.LICENSE_CACHE,
+            licenseKey,
+            env.HYPERWHISPER_API_URL,
+            env.HYPERWHISPER_API_KEY,
+            logger,
+            true // forceRefresh
+          );
+          isValid = validation.isValid;
+          credits = validation.credits;
+        }
+      } else {
+        // Normal flow: use cache-first validation
+        const validation = await validateAndGetCredits(
+          env.LICENSE_CACHE,
+          licenseKey,
+          env.HYPERWHISPER_API_URL,
+          env.HYPERWHISPER_API_KEY,
+          logger,
+          false
+        );
+        isValid = validation.isValid;
+        credits = validation.credits;
+      }
 
       if (!isValid) {
         return new Response(JSON.stringify({

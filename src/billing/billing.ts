@@ -2,9 +2,14 @@
 // Manages usage-based billing through Next.js APIs backed by Supabase
 //
 // ARCHITECTURE:
-// - License validation: Calls Next.js /api/license/validate
-// - Credit balance: Returned with validation (include_credits: true)
-// - Usage tracking: Calls Next.js /api/license/credits to deduct
+// - License validation: Calls Next.js /api/license/validate (full validation + Polar fallback)
+// - Credit balance: GET /api/license/credits (lightweight balance-only query)
+// - Usage tracking: POST /api/license/credits (deduct credits)
+//
+// ENDPOINTS USED:
+// - validateAndGetCredits: Uses /api/license/validate (includes device tracking, Polar import)
+// - getCreditsBalance: Uses GET /api/license/credits (fast, balance-only)
+// - recordUsage: Uses POST /api/license/credits (deduct credits)
 //
 // BENEFITS:
 // - Centralized billing logic in Next.js (Supabase)
@@ -106,6 +111,87 @@ export async function validateAndGetCredits(
     return {
       isValid: false,
       credits: 0,
+    };
+  }
+}
+
+/**
+ * Get credit balance for a license (lightweight, balance-only query)
+ *
+ * Uses GET /api/license/credits which is faster than validate endpoint because it:
+ * - Does NOT do Polar fallback/import
+ * - Does NOT track device validations
+ * - Just queries the database for current balance
+ *
+ * USE CASES:
+ * - Refreshing balance after usage (credits page refresh button)
+ * - Getting updated balance when we already know license is valid (cache hit for validity)
+ * - Any scenario where we just need current credits, not full validation
+ *
+ * @param licenseCache - KV namespace for license cache
+ * @param licenseKey - License key to query
+ * @param apiUrl - Base URL for Next.js API (e.g., https://hyperwhisper.com)
+ * @param apiKey - API key for authentication
+ * @param logger - Logger instance
+ * @returns Credit balance or error
+ */
+export async function getCreditsBalance(
+  licenseCache: KVNamespace,
+  licenseKey: string,
+  apiUrl: string,
+  apiKey: string,
+  logger: Logger
+): Promise<{ credits: number; error?: string }> {
+  try {
+    const response = await fetch(
+      `${apiUrl}/api/license/credits?license_key=${encodeURIComponent(licenseKey)}`,
+      {
+        method: 'GET',
+        headers: {
+          'X-API-Key': apiKey,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({})) as { error?: string };
+      const errorMessage = errorData.error || `HTTP ${response.status}`;
+
+      logger.log('warn', 'Failed to get credit balance', {
+        status: response.status,
+        error: errorMessage,
+      });
+
+      return {
+        credits: 0,
+        error: errorMessage,
+      };
+    }
+
+    const data = await response.json() as {
+      credits: number;
+      stripe_customer_id?: string;
+    };
+
+    logger.log('info', 'Credit balance retrieved', {
+      credits: data.credits,
+    });
+
+    // Update cache with new balance (keep existing validity status)
+    // This ensures cache reflects latest balance without needing full validation
+    await setLicenseInCache(licenseCache, licenseKey, data.credits, true, logger);
+
+    return {
+      credits: data.credits,
+    };
+  } catch (error) {
+    logger.log('error', 'Failed to get credit balance', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+
+    return {
+      credits: 0,
+      error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
 }
