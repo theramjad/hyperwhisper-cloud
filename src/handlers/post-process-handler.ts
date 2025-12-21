@@ -26,13 +26,11 @@ import {
   stripCleanMarkers,
 } from '../utils/text-processing';
 import {
-  createPolarClient,
-  validateAndGetCustomer,
-  getCustomerMeterBalance,
-  ingestUsageEvent,
+  validateAndGetCredits,
+  recordUsage,
   calculateCreditsForCost,
   hasSufficientBalance,
-} from '../billing/polar-billing';
+} from '../billing/stripe-billing';
 import {
   getDeviceBalance,
   deductDeviceCredits,
@@ -236,29 +234,26 @@ export async function handlePostProcess(
     // ========================================================================
     // STEP 5: Validate credits
     // ========================================================================
-    let customerId: string | null = null;
     let isLicensed = false;
     let isTrial = false;
-    let polar: ReturnType<typeof createPolarClient> | null = null;
+    let licensedCredits = 0;
 
     const estimatedCredits = ESTIMATED_POST_PROCESS_CREDITS;
 
     if (licenseKey) {
-      // LICENSED USER: Validate with Polar and check meter balance
+      // LICENSED USER: Validate with Next.js API and check credit balance
       logger.log('info', 'Processing post-process request for licensed user');
 
-      polar = createPolarClient(env.POLAR_ACCESS_TOKEN, (env as any).ENVIRONMENT);
-
-      // Validate license and get customer ID (with cache)
-      const validation = await validateAndGetCustomer(
-        polar,
+      // Validate license and get credit balance (with cache)
+      const validation = await validateAndGetCredits(
         env.LICENSE_CACHE,
         licenseKey,
-        env.POLAR_ORGANIZATION_ID,
+        env.HYPERWHISPER_API_URL,
+        env.HYPERWHISPER_API_KEY,
         logger
       );
 
-      if (!validation.isValid || !validation.customerId) {
+      if (!validation.isValid) {
         logger.log('warn', 'Invalid license key provided for post-process');
         return new Response(JSON.stringify({
           error: 'Invalid license',
@@ -269,23 +264,13 @@ export async function handlePostProcess(
         });
       }
 
-      customerId = validation.customerId;
       isLicensed = true;
+      licensedCredits = validation.credits;
 
-      // Check meter balance
-      const meterStatus = await getCustomerMeterBalance(
-        polar,
-        customerId,
-        env.POLAR_ORGANIZATION_ID,
-        env.POLAR_METER_ID,
-        logger
-      );
-
-      const balanceCredits = roundToTenth(meterStatus.balance);
+      const balanceCredits = roundToTenth(licensedCredits);
 
       if (!hasSufficientBalance(balanceCredits, estimatedCredits)) {
         logger.log('warn', 'Insufficient balance for licensed user (post-process)', {
-          customerId,
           balance: balanceCredits,
           estimated: estimatedCredits
         });
@@ -302,7 +287,6 @@ export async function handlePostProcess(
       }
 
       logger.log('info', 'Licensed user authorized for post-process', {
-        customerId,
         balance: balanceCredits,
         estimated: estimatedCredits
       });
@@ -436,12 +420,13 @@ export async function handlePostProcess(
     const actualCredits = roundToTenth(calculateCreditsForCost(costUsd));
 
     // Update usage tracking
-    if (isLicensed && customerId && polar) {
-      // LICENSED USER: Ingest event to Polar
+    if (isLicensed && licenseKey) {
+      // LICENSED USER: Record usage via Next.js API
       ctx.waitUntil(
-        ingestUsageEvent(
-          polar,
-          customerId,
+        recordUsage(
+          env.HYPERWHISPER_API_URL,
+          env.HYPERWHISPER_API_KEY,
+          licenseKey,
           actualCredits,
           {
             post_processing_cost_usd: costUsd,
@@ -454,8 +439,7 @@ export async function handlePostProcess(
         )
       );
 
-      logger.log('info', 'Usage event queued for Polar (post-process)', {
-        customerId,
+      logger.log('info', 'Usage event queued for recording (post-process)', {
         credits: actualCredits
       });
 

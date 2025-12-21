@@ -13,8 +13,9 @@ name = "hyperwhisper-v1-dev"
 [env.development.vars]
 ENVIRONMENT = "development"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-POLAR_ORGANIZATION_ID = "732c78bd-50f0-497f-b7d3-0f1df8bb1f4d"
-POLAR_METER_ID = "595e2fdc-8a03-4647-aceb-e9706da0f74f"
+# License/Credits API - points to Next.js backend
+# HYPERWHISPER_API_URL set in secrets (e.g., "https://hyperwhisper.com" or localhost for dev)
+# HYPERWHISPER_API_KEY set in secrets
 
 # Development KV namespaces (v1)
 [[env.development.kv_namespaces]]
@@ -50,8 +51,9 @@ name = "hyperwhisper-v1-prod"
 [env.production.vars]
 ENVIRONMENT = "production"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-POLAR_ORGANIZATION_ID = "34d49b08-4351-4ab7-9f79-c8d12a8cca43"
-POLAR_METER_ID = "f7a7873f-27f7-49ff-b45d-f3aff3429ad1"
+# License/Credits API - points to Next.js backend
+# HYPERWHISPER_API_URL set in secrets (https://hyperwhisper.com)
+# HYPERWHISPER_API_KEY set in secrets
 
 # Production KV namespaces (v1)
 [[env.production.kv_namespaces]]

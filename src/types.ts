@@ -2,15 +2,20 @@
 // Centralized TypeScript interfaces for the edge transcription service
 
 export interface Env {
+  // Transcription APIs
   DEEPGRAM_API_KEY: string; // Deepgram API key for Nova-3 transcription
   GROQ_API_KEY: string; // Groq API key for Llama post-processing
   GROQ_BASE_URL?: string;
+
+  // KV Namespaces
   RATE_LIMITER: KVNamespace; // IP-based rate limiting (daily quota)
-  DEVICE_CREDITS: KVNamespace; // Device trial credits (1000 credits per device_id)
-  LICENSE_CACHE: KVNamespace; // License validation cache (7 days TTL)
-  POLAR_ACCESS_TOKEN: string; // Polar.sh API token (required)
-  POLAR_ORGANIZATION_ID: string; // Polar.sh organization ID (required)
-  POLAR_METER_ID: string; // Polar.sh meter ID for transcription credits
+  DEVICE_CREDITS: KVNamespace; // Device trial credits (150 credits per device_id)
+  LICENSE_CACHE: KVNamespace; // License validation cache (5 min TTL for credits)
+
+  // License/Credits API (Next.js backend)
+  // CF Workers call these endpoints for license validation and credit management
+  HYPERWHISPER_API_URL: string; // Base URL (e.g., "https://hyperwhisper.com")
+  HYPERWHISPER_API_KEY: string; // API key for authenticating with Next.js endpoints
 
   // R2 bucket for temporary audio storage (large file transcription >30MB)
   // Files are uploaded to R2, Deepgram fetches via presigned URL, then deleted
@@ -21,6 +26,9 @@ export interface Env {
   R2_ACCESS_KEY_ID: string;
   R2_SECRET_ACCESS_KEY: string;
   R2_ACCOUNT_ID: string; // Cloudflare account ID (visible in dashboard URL)
+
+  // Environment indicator (set in wrangler.toml)
+  ENVIRONMENT?: string; // "development" or "production"
 }
 
 // TRANSCRIPTION REQUEST

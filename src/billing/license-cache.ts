@@ -1,24 +1,29 @@
 // LICENSE CACHE MODULE
-// Caches license validation results to reduce Polar API calls
+// Caches license validation results to reduce API calls
 //
 // CACHE STRATEGY:
-// - Cache valid licenses for 7 days
+// - Cache valid licenses for 5 minutes (to keep credits fresh)
 // - Cache invalid licenses for 1 hour (to prevent abuse)
-// - Key format: `license:{license_key_hash}`
+// - Key format: `license:{license_key}`
 //
 // BENEFITS:
-// - Reduces Polar API calls from 2 per request to ~0 (cache hit)
+// - Reduces Next.js API calls from 1 per request to ~0 (cache hit)
 // - Faster response times (no API latency)
-// - Stays within Polar rate limits (100 req/s, 300 req/min)
+// - Credit balance is cached but refreshes frequently enough to stay accurate
+//
+// NOTE: Valid license TTL is shorter (5 min) vs old Polar approach (7 days)
+// because we now cache credit balance which changes with usage
 
 import { Logger } from '../utils/logger';
 
 // Cache configuration
-const VALID_LICENSE_TTL = 7 * 24 * 60 * 60; // 7 days in seconds
+// Valid licenses cached for 5 minutes (credits change with usage)
+// Invalid licenses cached for 1 hour (prevent brute-force)
+const VALID_LICENSE_TTL = 5 * 60; // 5 minutes in seconds
 const INVALID_LICENSE_TTL = 60 * 60; // 1 hour in seconds
 
-interface CachedLicense {
-  customerId: string;
+export interface CachedLicense {
+  credits: number; // Credit balance at time of caching
   isValid: boolean;
   cachedAt: number; // Unix timestamp
 }
@@ -32,7 +37,7 @@ interface CachedLicense {
  * @returns Cached license data or null if not found
  */
 export async function getLicenseFromCache(
-  kv: any,
+  kv: KVNamespace,
   licenseKey: string,
   logger: Logger
 ): Promise<CachedLicense | null> {
@@ -45,13 +50,15 @@ export async function getLicenseFromCache(
       return null;
     }
 
+    const cachedData = cached as CachedLicense;
+
     logger.log('info', 'License cache hit', {
-      customerId: cached.customerId,
-      isValid: cached.isValid,
-      cacheAge: Math.floor((Date.now() - cached.cachedAt) / 1000) + 's',
+      credits: cachedData.credits,
+      isValid: cachedData.isValid,
+      cacheAge: Math.floor((Date.now() - cachedData.cachedAt) / 1000) + 's',
     });
 
-    return cached as CachedLicense;
+    return cachedData;
   } catch (error) {
     logger.log('error', 'Failed to get license from cache', {
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -65,14 +72,14 @@ export async function getLicenseFromCache(
  *
  * @param kv - KV namespace for license cache
  * @param licenseKey - License key
- * @param customerId - Customer ID from Polar
+ * @param credits - Credit balance
  * @param isValid - Whether the license is valid
  * @param logger - Logger instance
  */
 export async function setLicenseInCache(
-  kv: any,
+  kv: KVNamespace,
   licenseKey: string,
-  customerId: string | null,
+  credits: number,
   isValid: boolean,
   logger: Logger
 ): Promise<void> {
@@ -81,7 +88,7 @@ export async function setLicenseInCache(
     const ttl = isValid ? VALID_LICENSE_TTL : INVALID_LICENSE_TTL;
 
     const cacheData: CachedLicense = {
-      customerId: customerId || '',
+      credits: credits || 0,
       isValid,
       cachedAt: Date.now(),
     };
@@ -91,9 +98,9 @@ export async function setLicenseInCache(
     });
 
     logger.log('info', 'License cached', {
-      customerId: customerId || 'none',
+      credits,
       isValid,
-      ttl: isValid ? '7 days' : '1 hour',
+      ttl: isValid ? '5 minutes' : '1 hour',
     });
   } catch (error) {
     logger.log('error', 'Failed to cache license', {
@@ -104,14 +111,14 @@ export async function setLicenseInCache(
 }
 
 /**
- * Invalidate a license in cache (e.g., when user deactivates)
+ * Invalidate a license in cache (e.g., when user deactivates or buys credits)
  *
  * @param kv - KV namespace for license cache
  * @param licenseKey - License key to invalidate
  * @param logger - Logger instance
  */
 export async function invalidateLicenseCache(
-  kv: any,
+  kv: KVNamespace,
   licenseKey: string,
   logger: Logger
 ): Promise<void> {
