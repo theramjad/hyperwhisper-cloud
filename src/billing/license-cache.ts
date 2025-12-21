@@ -2,24 +2,23 @@
 // Caches license validation results to reduce API calls
 //
 // CACHE STRATEGY:
-// - Cache valid licenses for 5 minutes (to keep credits fresh)
+// - Cache valid licenses for 1 hour (credits page and refresh button bypass cache)
 // - Cache invalid licenses for 1 hour (to prevent abuse)
 // - Key format: `license:{license_key}`
 //
 // BENEFITS:
-// - Reduces Next.js API calls from 1 per request to ~0 (cache hit)
+// - Reduces Next.js API calls significantly (cache hit for most transcription requests)
 // - Faster response times (no API latency)
-// - Credit balance is cached but refreshes frequently enough to stay accurate
+// - Users can force refresh via credits page or refresh button to see updated balance
 //
-// NOTE: Valid license TTL is shorter (5 min) vs old Polar approach (7 days)
-// because we now cache credit balance which changes with usage
+// NOTE: Valid license TTL is 1 hour; users bypass cache when viewing credits page
 
 import { Logger } from '../utils/logger';
 
 // Cache configuration
-// Valid licenses cached for 5 minutes (credits change with usage)
+// Valid licenses cached for 1 hour (users bypass cache via credits page/refresh)
 // Invalid licenses cached for 1 hour (prevent brute-force)
-const VALID_LICENSE_TTL = 5 * 60; // 5 minutes in seconds
+const VALID_LICENSE_TTL = 60 * 60; // 1 hour in seconds
 const INVALID_LICENSE_TTL = 60 * 60; // 1 hour in seconds
 
 export interface CachedLicense {
@@ -100,7 +99,7 @@ export async function setLicenseInCache(
     logger.log('info', 'License cached', {
       credits,
       isValid,
-      ttl: isValid ? '5 minutes' : '1 hour',
+      ttl: '1 hour',
     });
   } catch (error) {
     logger.log('error', 'Failed to cache license', {

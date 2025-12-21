@@ -261,10 +261,11 @@ export async function handleStreamingTranscription(
     let licensedCredits = 0;
 
     if (licenseKey) {
-      // LICENSED USER: Validate with Next.js API and check credit balance
+      // LICENSED USER: Validate license only (credit check temporarily disabled)
+      // TODO: Re-enable credit checking once billing is fully tested
       logger.log('info', 'Processing streaming request for licensed user');
 
-      // Validate license and get credit balance (with cache)
+      // Validate license (skip credit balance check for now)
       const validation = await validateAndGetCredits(
         env.LICENSE_CACHE,
         licenseKey,
@@ -287,32 +288,32 @@ export async function handleStreamingTranscription(
       isLicensed = true;
       licensedCredits = validation.credits;
 
-      const balanceCredits = roundToTenth(licensedCredits);
+      // TEMPORARILY DISABLED: Credit balance check for licensed users
+      // const balanceCredits = roundToTenth(licensedCredits);
+      //
+      // if (!hasSufficientBalance(balanceCredits, estimatedCredits)) {
+      //   logger.log('warn', 'Insufficient balance for licensed user (streaming)', {
+      //     balance: balanceCredits,
+      //     estimated: estimatedCredits
+      //   });
+      //
+      //   const minutesRemaining = Math.floor(balanceCredits / CREDITS_PER_MINUTE);
+      //   const minutesRequired = Math.ceil(estimatedCredits / CREDITS_PER_MINUTE);
+      //
+      //   return new Response(JSON.stringify({
+      //     error: 'Insufficient credits',
+      //     message: `You have ${balanceCredits.toFixed(1)} credits remaining. This transcription requires approximately ${estimatedCredits.toFixed(1)} credits.`,
+      //     credits_remaining: balanceCredits,
+      //     minutes_remaining: minutesRemaining,
+      //     minutes_required: minutesRequired,
+      //     credits_per_minute: CREDITS_PER_MINUTE,
+      //   }), {
+      //     status: 402, // Payment Required
+      //     headers: { ...getCORSHeaders(), 'content-type': 'application/json' }
+      //   });
+      // }
 
-      if (!hasSufficientBalance(balanceCredits, estimatedCredits)) {
-        logger.log('warn', 'Insufficient balance for licensed user (streaming)', {
-          balance: balanceCredits,
-          estimated: estimatedCredits
-        });
-
-        const minutesRemaining = Math.floor(balanceCredits / CREDITS_PER_MINUTE);
-        const minutesRequired = Math.ceil(estimatedCredits / CREDITS_PER_MINUTE);
-
-        return new Response(JSON.stringify({
-          error: 'Insufficient credits',
-          message: `You have ${balanceCredits.toFixed(1)} credits remaining. This transcription requires approximately ${estimatedCredits.toFixed(1)} credits.`,
-          credits_remaining: balanceCredits,
-          minutes_remaining: minutesRemaining,
-          minutes_required: minutesRequired,
-          credits_per_minute: CREDITS_PER_MINUTE,
-        }), {
-          status: 402, // Payment Required
-          headers: { ...getCORSHeaders(), 'content-type': 'application/json' }
-        });
-      }
-
-      logger.log('info', 'Licensed user authorized for streaming', {
-        balance: balanceCredits,
+      logger.log('info', 'Licensed user authorized for streaming (credit check disabled)', {
         estimated: estimatedCredits
       });
 

@@ -54,6 +54,7 @@ export async function handleUsageQuery(
     const queryLicenseKey = url.searchParams.get('license_key');
     const queryDeviceId = url.searchParams.get('device_id');
     const identifier = url.searchParams.get('identifier');
+    const forceRefresh = url.searchParams.get('force_refresh') === 'true';
 
     // Allow legacy `identifier` param to represent either license key or device ID
     const resolved = resolveIdentifier({
@@ -67,15 +68,16 @@ export async function handleUsageQuery(
 
     if (licenseKey) {
       // LICENSED USER: Query Next.js API for credit balance
-      logger.log('info', 'Usage query for licensed user');
+      logger.log('info', 'Usage query for licensed user', { forceRefresh });
 
-      // Validate license and get credit balance (with cache)
+      // Validate license and get credit balance (with cache, unless forceRefresh)
       const { isValid, credits } = await validateAndGetCredits(
         env.LICENSE_CACHE,
         licenseKey,
         env.HYPERWHISPER_API_URL,
         env.HYPERWHISPER_API_KEY,
-        logger
+        logger,
+        forceRefresh
       );
 
       if (!isValid) {

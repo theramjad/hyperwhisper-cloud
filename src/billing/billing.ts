@@ -25,6 +25,7 @@ import { roundToTenth, roundUpToTenth } from '../utils/utils';
  * @param apiUrl - Base URL for Next.js API (e.g., https://hyperwhisper.com)
  * @param apiKey - API key for authentication
  * @param logger - Logger instance
+ * @param forceRefresh - If true, bypass cache and fetch fresh data from API
  * @returns License validation result with credit balance
  */
 export async function validateAndGetCredits(
@@ -32,17 +33,22 @@ export async function validateAndGetCredits(
   licenseKey: string,
   apiUrl: string,
   apiKey: string,
-  logger: Logger
+  logger: Logger,
+  forceRefresh: boolean = false
 ): Promise<{ isValid: boolean; credits: number }> {
-  // STEP 1: Check cache first
-  const cached = await getLicenseFromCache(licenseCache, licenseKey, logger);
+  // STEP 1: Check cache first (unless forceRefresh is true)
+  if (!forceRefresh) {
+    const cached = await getLicenseFromCache(licenseCache, licenseKey, logger);
 
-  if (cached) {
-    // Cache hit - return cached validation status and credits
-    return {
-      isValid: cached.isValid,
-      credits: cached.credits,
-    };
+    if (cached) {
+      // Cache hit - return cached validation status and credits
+      return {
+        isValid: cached.isValid,
+        credits: cached.credits,
+      };
+    }
+  } else {
+    logger.log('info', 'Force refresh requested, bypassing cache');
   }
 
   // STEP 2: Cache miss - validate with Next.js API
