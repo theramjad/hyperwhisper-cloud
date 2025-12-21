@@ -1,5 +1,5 @@
-// STRIPE BILLING MODULE
-// Manages usage-based billing through Next.js APIs backed by Supabase/Stripe
+// BILLING MODULE
+// Manages usage-based billing through Next.js APIs backed by Supabase
 //
 // ARCHITECTURE:
 // - License validation: Calls Next.js /api/license/validate
@@ -7,7 +7,7 @@
 // - Usage tracking: Calls Next.js /api/license/credits to deduct
 //
 // BENEFITS:
-// - Centralized billing logic in Next.js (Stripe SDK, Supabase)
+// - Centralized billing logic in Next.js (Supabase)
 // - CF Workers only make HTTP calls, no SDK dependencies
 // - Consistent with macOS app validation flow
 

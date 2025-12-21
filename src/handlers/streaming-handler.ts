@@ -37,7 +37,7 @@ import {
   recordUsage,
   calculateCreditsForCost,
   hasSufficientBalance,
-} from '../billing/stripe-billing';
+} from '../billing/billing';
 import {
   getDeviceBalance,
   deductDeviceCredits,

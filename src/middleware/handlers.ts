@@ -5,11 +5,9 @@ import type { Env, UsageResponse } from '../types';
 import { Logger } from '../utils/logger';
 import { getUsageStats } from './rate-limiter';
 import {
-  createPolarClient,
-  validateAndGetCustomer,
-  getCustomerMeterBalance,
+  validateAndGetCredits,
   formatMeterBalance
-} from '../billing/polar-billing';
+} from '../billing/billing';
 import {
   getDeviceBalance,
   formatDeviceBalance
@@ -68,21 +66,19 @@ export async function handleUsageQuery(
     const { licenseKey, deviceId } = resolved;
 
     if (licenseKey) {
-      // LICENSED USER: Query Polar for meter balance
+      // LICENSED USER: Query Next.js API for credit balance
       logger.log('info', 'Usage query for licensed user');
 
-      const polar = createPolarClient(env.POLAR_ACCESS_TOKEN, (env as any).ENVIRONMENT);
-
-      // Validate license and get customer ID (with cache)
-      const { customerId, isValid } = await validateAndGetCustomer(
-        polar,
+      // Validate license and get credit balance (with cache)
+      const { isValid, credits } = await validateAndGetCredits(
         env.LICENSE_CACHE,
         licenseKey,
-        env.POLAR_ORGANIZATION_ID,
+        env.HYPERWHISPER_API_URL,
+        env.HYPERWHISPER_API_KEY,
         logger
       );
 
-      if (!isValid || !customerId) {
+      if (!isValid) {
         return new Response(JSON.stringify({
           error: 'Invalid license key',
           message: 'The provided license key is invalid or expired'
@@ -92,16 +88,7 @@ export async function handleUsageQuery(
         });
       }
 
-      // Get customer meter balance
-      const { balance, limit } = await getCustomerMeterBalance(
-        polar,
-        customerId,
-        env.POLAR_ORGANIZATION_ID,
-        env.POLAR_METER_ID,
-        logger
-      );
-
-      const formattedBalance = formatMeterBalance(balance, limit);
+      const formattedBalance = formatMeterBalance(credits);
 
       const response: UsageResponse = {
         credits_remaining: formattedBalance.credits_remaining,
@@ -110,11 +97,9 @@ export async function handleUsageQuery(
         is_licensed: true,
         is_trial: false,
         is_anonymous: false,
-        customer_id: customerId,
       };
 
       logger.log('info', 'Usage query successful for licensed user', {
-        customerId,
         balance: formattedBalance.credits_remaining
       });
 
