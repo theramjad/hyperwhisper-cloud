@@ -74,7 +74,7 @@ export async function checkRateLimit(
     const allowed = creditsAfterRequest <= DAILY_FREE_CREDITS;
     const creditsRemaining = roundToTenth(Math.max(0, DAILY_FREE_CREDITS - creditsUsed));
 
-    logger.log('info', 'Rate limit check for anonymous user', {
+    logger.log('info', 'IP rate limit check completed - anti-abuse protection for trial users', {
       ip,
       dateKey,
       creditsUsed,
@@ -82,6 +82,7 @@ export async function checkRateLimit(
       estimatedCredits,
       allowed,
       dailyLimit: DAILY_FREE_CREDITS,
+      decision: allowed ? 'ALLOWED' : 'BLOCKED',
     });
 
     return {
@@ -92,9 +93,10 @@ export async function checkRateLimit(
       isAnonymous: true,
     };
   } catch (error) {
-    logger.log('error', 'Rate limit check failed', {
+    logger.log('error', 'IP rate limit KV check failed - blocking request for safety', {
       error: error instanceof Error ? error.message : 'Unknown error',
       ip,
+      action: 'Denying request to prevent potential abuse during KV outage',
     });
 
     // On error, deny access for safety
@@ -141,19 +143,21 @@ export async function incrementUsage(
       expirationTtl,
     });
 
-    logger.log('info', 'Usage incremented for anonymous user', {
+    logger.log('info', 'IP daily quota updated in KV after successful transcription', {
       ip,
       dateKey,
       previousCredits: currentCredits,
       creditsAdded: normalizedUsage,
       newTotal: newCredits,
       remainingCredits: roundToTenth(Math.max(0, DAILY_FREE_CREDITS - newCredits)),
+      expiresIn: `${Math.floor(expirationTtl / 3600)}h`,
     });
   } catch (error) {
-    logger.log('error', 'Failed to increment usage', {
+    logger.log('error', 'Failed to update IP quota in KV - quota may be stale', {
       error: error instanceof Error ? error.message : 'Unknown error',
       ip,
       creditsUsed: roundToTenth(creditsUsed),
+      consequence: 'User may exceed daily limit until KV recovers',
     });
   }
 }

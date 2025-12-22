@@ -45,13 +45,13 @@ export async function getLicenseFromCache(
     const cached = await kv.get(cacheKey, 'json');
 
     if (!cached) {
-      logger.log('info', 'License cache miss');
+      logger.log('info', 'KV cache miss - will validate license via Next.js API');
       return null;
     }
 
     const cachedData = cached as CachedLicense;
 
-    logger.log('info', 'License cache hit', {
+    logger.log('info', 'KV cache hit - using cached license data (no API call needed)', {
       credits: cachedData.credits,
       isValid: cachedData.isValid,
       cacheAge: Math.floor((Date.now() - cachedData.cachedAt) / 1000) + 's',
@@ -59,7 +59,7 @@ export async function getLicenseFromCache(
 
     return cachedData;
   } catch (error) {
-    logger.log('error', 'Failed to get license from cache', {
+    logger.log('error', 'KV cache read failed - will fallback to API validation', {
       error: error instanceof Error ? error.message : 'Unknown error',
     });
     return null;
@@ -96,13 +96,14 @@ export async function setLicenseInCache(
       expirationTtl: ttl,
     });
 
-    logger.log('info', 'License cached', {
+    logger.log('info', 'License data written to KV cache - subsequent requests will use cached data', {
       credits,
       isValid,
       ttl: '1 hour',
+      expiresAt: new Date(Date.now() + ttl * 1000).toISOString(),
     });
   } catch (error) {
-    logger.log('error', 'Failed to cache license', {
+    logger.log('error', 'KV cache write failed - subsequent requests will hit API (degraded performance)', {
       error: error instanceof Error ? error.message : 'Unknown error',
     });
     // Don't throw - caching failure shouldn't break the request
@@ -125,9 +126,9 @@ export async function invalidateLicenseCache(
     const cacheKey = `license:${licenseKey}`;
     await kv.delete(cacheKey);
 
-    logger.log('info', 'License cache invalidated');
+    logger.log('info', 'KV cache entry deleted - next validation will fetch fresh license data from API');
   } catch (error) {
-    logger.log('error', 'Failed to invalidate license cache', {
+    logger.log('error', 'KV cache deletion failed - stale data may persist until TTL expires', {
       error: error instanceof Error ? error.message : 'Unknown error',
     });
   }

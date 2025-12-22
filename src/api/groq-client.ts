@@ -51,12 +51,14 @@ export async function requestGroqChat(
 
   if (!response.ok) {
     const errorText = await safeReadText(response);
-    logger.log('error', 'Groq chat request failed', {
+    logger.log('error', 'Groq API returned error - post-processing failed', {
       requestId,
       status: response.status,
       statusText: response.statusText,
       endpoint: chatUrl,
       errorText,
+      model: model,
+      action: 'Will retry with exponential backoff if attempts remain',
     });
     throw new Error(`Groq chat failed with status ${response.status}`);
   }

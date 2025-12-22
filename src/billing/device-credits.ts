@@ -52,14 +52,15 @@ async function initializeDevice(
     // Store with no expiration (trial credits never expire)
     await kv.put(deviceKey, JSON.stringify(initialBalance));
 
-    logger.log('info', 'New device initialized with trial credits', {
-      deviceId,
+    logger.log('info', 'New trial device registered - allocated initial credits in KV', {
+      deviceId: deviceId.substring(0, 8) + '...',
       initialCredits: INITIAL_DEVICE_CREDITS,
+      estimatedMinutes: Math.floor(INITIAL_DEVICE_CREDITS / CREDITS_PER_MINUTE),
     });
   } catch (error) {
-    logger.log('error', 'Failed to initialize device', {
+    logger.log('error', 'Failed to initialize trial device in KV - user cannot proceed', {
       error: error instanceof Error ? error.message : 'Unknown error',
-      deviceId,
+      deviceId: deviceId.substring(0, 8) + '...',
     });
     throw error;
   }
@@ -108,11 +109,12 @@ export async function getDeviceBalance(
     // Estimate remaining minutes using shared conversion rate
     const minutesRemaining = Math.floor(creditsRemaining / CREDITS_PER_MINUTE);
 
-    logger.log('info', 'Device balance retrieved', {
-      deviceId,
+    logger.log('info', 'Trial device balance loaded from KV', {
+      deviceId: deviceId.substring(0, 8) + '...',
       creditsRemaining: balance.creditsRemaining,
       creditsUsed: balance.creditsUsed,
       minutesRemaining,
+      status: creditsRemaining <= 0 ? 'EXHAUSTED' : 'ACTIVE',
     });
 
     return {
@@ -123,9 +125,10 @@ export async function getDeviceBalance(
       isExhausted: creditsRemaining <= 0,
     };
   } catch (error) {
-    logger.log('error', 'Failed to get device balance', {
+    logger.log('error', 'KV read failed for device balance - treating as exhausted for safety', {
       error: error instanceof Error ? error.message : 'Unknown error',
-      deviceId,
+      deviceId: deviceId.substring(0, 8) + '...',
+      action: 'Returning zero balance to prevent unauthorized usage',
     });
 
     // On error, return exhausted state for safety
@@ -173,12 +176,13 @@ export async function deductDeviceCredits(
     // Store updated balance
     await kv.put(deviceKey, JSON.stringify(updatedBalance));
 
-    logger.log('info', 'Device credits deducted', {
-      deviceId,
+    logger.log('info', 'Trial device credits deducted - balance updated in KV', {
+      deviceId: deviceId.substring(0, 8) + '...',
       creditsDeducted: creditsToDeduct,
       previousRemaining: currentBalance.creditsRemaining,
       newRemaining: newCreditsRemaining,
       totalUsed: newCreditsUsed,
+      percentUsed: ((newCreditsUsed / currentBalance.totalAllocated) * 100).toFixed(1) + '%',
     });
 
     return {
@@ -189,10 +193,11 @@ export async function deductDeviceCredits(
       isExhausted: newCreditsRemaining <= 0,
     };
   } catch (error) {
-    logger.log('error', 'Failed to deduct device credits', {
+    logger.log('error', 'Failed to deduct trial device credits from KV - balance may be incorrect', {
       error: error instanceof Error ? error.message : 'Unknown error',
-      deviceId,
+      deviceId: deviceId.substring(0, 8) + '...',
       creditsToDeduct,
+      action: 'Request succeeded but credits not deducted - potential abuse vector',
     });
     throw error;
   }

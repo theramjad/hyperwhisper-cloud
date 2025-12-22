@@ -51,7 +51,7 @@ export async function validateAndGetCredits(
       };
     }
   } else {
-    logger.log('info', 'Force refresh requested, bypassing cache');
+    logger.log('info', 'Bypassing KV cache due to force refresh request');
   }
 
   // STEP 2: Cache miss - validate with Next.js API
@@ -81,7 +81,7 @@ export async function validateAndGetCredits(
     await setLicenseInCache(licenseCache, licenseKey, credits, isValid, logger);
 
     if (isValid) {
-      logger.log('info', 'License validated successfully (from API)', {
+      logger.log('info', 'License validated via Next.js API - caching result in KV for 1 hour', {
         credits,
         hasStripeCustomer: !!data.stripe_customer_id,
       });
@@ -92,7 +92,7 @@ export async function validateAndGetCredits(
       };
     }
 
-    logger.log('warn', 'Invalid license key (from API)', {
+    logger.log('warn', 'License validation failed - invalid or revoked license key', {
       error: data.error || 'invalid',
     });
 
@@ -101,7 +101,7 @@ export async function validateAndGetCredits(
       credits: 0,
     };
   } catch (error) {
-    logger.log('error', 'License validation failed', {
+    logger.log('error', 'License validation API call failed - network or server error', {
       error: error instanceof Error ? error.message : 'Unknown error',
     });
 
@@ -149,7 +149,7 @@ export async function getCreditsBalance(
       const errorData = await response.json().catch(() => ({})) as { error?: string };
       const errorMessage = errorData.error || `HTTP ${response.status}`;
 
-      logger.log('warn', 'Failed to get credit balance', {
+      logger.log('warn', 'GET /api/license/credits returned error - license may be invalid', {
         status: response.status,
         error: errorMessage,
       });
@@ -165,7 +165,7 @@ export async function getCreditsBalance(
       stripe_customer_id?: string;
     };
 
-    logger.log('info', 'Credit balance retrieved', {
+    logger.log('info', 'Credit balance fetched from Supabase - updating KV cache', {
       credits: data.credits,
     });
 
@@ -177,7 +177,7 @@ export async function getCreditsBalance(
       credits: data.credits,
     };
   } catch (error) {
-    logger.log('error', 'Failed to get credit balance', {
+    logger.log('error', 'GET /api/license/credits failed - network or server error', {
       error: error instanceof Error ? error.message : 'Unknown error',
     });
 
@@ -192,6 +192,11 @@ export async function getCreditsBalance(
  * Record usage and deduct credits
  * Called after successful transcription
  *
+ * CACHE UPDATE:
+ * After successful deduction, updates the KV cache with the new balance.
+ * This ensures the cache stays in sync with Supabase and prevents stale balances.
+ *
+ * @param licenseCache - KV namespace for license cache
  * @param apiUrl - Base URL for Next.js API
  * @param licenseKey - License key for the user
  * @param creditsUsed - Number of credits to deduct
@@ -199,6 +204,7 @@ export async function getCreditsBalance(
  * @param logger - Logger instance
  */
 export async function recordUsage(
+  licenseCache: KVNamespace,
   apiUrl: string,
   licenseKey: string,
   creditsUsed: number,
@@ -220,7 +226,7 @@ export async function recordUsage(
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      logger.log('warn', 'Failed to record usage', {
+      logger.log('warn', 'POST /api/license/credits failed - credits NOT deducted from Supabase', {
         status: response.status,
         error: (errorData as Record<string, unknown>).error || 'Unknown error',
         creditsUsed,
@@ -233,12 +239,24 @@ export async function recordUsage(
       credits_deducted: number;
     };
 
-    logger.log('info', 'Usage recorded successfully', {
+    logger.log('info', 'Credits successfully deducted from Supabase database', {
       creditsDeducted: data.credits_deducted,
       creditsRemaining: data.credits_remaining,
     });
+
+    // Update KV cache with new balance to keep it in sync
+    // This runs in background and doesn't block the response
+    logger.log('info', 'Syncing new balance to KV cache after deduction', {
+      previousCachedBalance: 'unknown (will be overwritten)',
+      newBalance: data.credits_remaining,
+      deducted: data.credits_deducted,
+    });
+    await setLicenseInCache(licenseCache, licenseKey, data.credits_remaining, true, logger);
+    logger.log('info', 'KV cache successfully updated - balance now in sync with Supabase', {
+      cachedBalance: data.credits_remaining,
+    });
   } catch (error) {
-    logger.log('error', 'Failed to record usage', {
+    logger.log('error', 'POST /api/license/credits network/server error - credits may NOT be deducted', {
       error: error instanceof Error ? error.message : 'Unknown error',
       creditsUsed,
     });
@@ -265,9 +283,11 @@ export async function invalidateLicenseCache(
     const cacheKey = `license:${licenseKey}`;
     await licenseCache.delete(cacheKey);
 
-    logger.log('info', 'License cache invalidated');
+    logger.log('info', 'License cache entry deleted from KV - next request will fetch fresh data', {
+      reason: 'Manual invalidation (e.g., after credit purchase or license change)',
+    });
   } catch (error) {
-    logger.log('error', 'Failed to invalidate license cache', {
+    logger.log('error', 'KV cache deletion failed - cache may contain stale data', {
       error: error instanceof Error ? error.message : 'Unknown error',
     });
   }

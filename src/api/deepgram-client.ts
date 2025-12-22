@@ -380,11 +380,14 @@ export async function transcribeWithDeepgram(
   // Handle API errors
   if (!deepgramResponse.ok) {
     const errorText = await safeReadText(deepgramResponse);
-    logger.log('error', 'Deepgram transcription failed', {
+    logger.log('error', 'Deepgram API returned error - transcription failed', {
       status: deepgramResponse.status,
       statusText: deepgramResponse.statusText,
       endpoint: url,
       errorText,
+      troubleshooting: deepgramResponse.status === 401 ? 'Check API key' :
+                       deepgramResponse.status === 429 ? 'Rate limit - reduce concurrent requests' :
+                       'Check Deepgram status page',
     });
 
     // Provide specific error messages for known status codes
@@ -570,11 +573,14 @@ export async function transcribeWithDeepgramStream(
   // Handle API errors
   if (!deepgramResponse.ok) {
     const errorText = await safeReadText(deepgramResponse);
-    logger.log('error', 'Streaming Deepgram transcription failed', {
+    logger.log('error', 'Streaming Deepgram API returned error - transcription failed', {
       status: deepgramResponse.status,
       statusText: deepgramResponse.statusText,
       endpoint: url,
       errorText,
+      troubleshooting: deepgramResponse.status === 401 ? 'Check API key' :
+                       deepgramResponse.status === 429 ? 'Rate limit - reduce concurrent requests' :
+                       'Check Deepgram status page',
     });
 
     // Provide specific error messages for known status codes

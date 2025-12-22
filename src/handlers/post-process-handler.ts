@@ -76,9 +76,10 @@ export async function handlePostProcess(
     const credits = await validateCredits(ctx, auth.value, ESTIMATED_POST_PROCESS_CREDITS);
     if (!credits.ok) return credits.response;
 
-    ctx.logger.log('info', 'Post-process starting', {
+    ctx.logger.log('info', 'Post-process starting - sending transcript to Groq for AI correction', {
       textLength: text.length,
       userType: auth.value.type,
+      model: 'llama-3.3-70b-versatile',
     });
 
     // =========================================================================
@@ -96,7 +97,12 @@ export async function handlePostProcess(
         initialDelayMs: 1000,
         backoffMultiplier: 2,
         onRetry: (attempt, error, delayMs) => {
-          ctx.logger.log('warn', 'Groq retry', { attempt, error: error.message, delayMs });
+          ctx.logger.log('warn', 'Groq API call failed - retrying with exponential backoff', {
+            attempt,
+            error: error.message,
+            delayMs,
+            nextRetryIn: `${delayMs}ms`,
+          });
         },
       }
     );
@@ -105,7 +111,13 @@ export async function handlePostProcess(
     const latencyMs = Date.now() - startTime;
     const costUsd = groqResponse.costUsd;
 
-    ctx.logger.log('info', 'Post-processing complete', { latencyMs, costUsd });
+    ctx.logger.log('info', 'Post-processing complete - Groq correction successful', {
+      latencyMs,
+      costUsd,
+      inputLength: text.length,
+      outputLength: correctedText.length,
+      compressionRatio: (correctedText.length / text.length * 100).toFixed(1) + '%',
+    });
 
     // =========================================================================
     // DEDUCT CREDITS (background)

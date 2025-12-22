@@ -66,16 +66,19 @@ async function validateLicensedCredits(
   // Note: Credit check may be temporarily disabled for testing
   // Uncomment when billing is fully operational
   if (!hasSufficientBalance(balance, estimatedCredits)) {
-    ctx.logger.log('warn', 'Insufficient balance for licensed user', {
+    ctx.logger.log('warn', 'Insufficient credits - licensed user request rejected', {
       balance,
       estimated: estimatedCredits,
+      deficit: roundToTenth(estimatedCredits - balance),
+      action: 'User needs to purchase more credits',
     });
     return fail(insufficientCreditsResponse(balance, estimatedCredits));
   }
 
-  ctx.logger.log('info', 'Licensed user credit check passed', {
+  ctx.logger.log('info', 'Licensed user has sufficient credits - pre-flight check passed', {
     balance,
     estimated: estimatedCredits,
+    afterTransaction: roundToTenth(balance - estimatedCredits),
   });
 
   return ok(undefined);
@@ -96,9 +99,11 @@ async function validateTrialCredits(
   const deviceBalance = await getDeviceBalance(ctx.env.DEVICE_CREDITS, deviceId, ctx.logger);
 
   if (deviceBalance.isExhausted || deviceBalance.creditsRemaining < estimatedCredits) {
-    ctx.logger.log('warn', 'Device credits exhausted', {
+    ctx.logger.log('warn', 'Trial credits exhausted - device has no remaining credits', {
       remaining: deviceBalance.creditsRemaining,
       estimated: estimatedCredits,
+      totalAllocated: deviceBalance.totalAllocated,
+      action: 'User needs to purchase a license to continue',
     });
     return fail(deviceCreditsExhaustedResponse(
       deviceBalance.creditsRemaining,
@@ -115,18 +120,21 @@ async function validateTrialCredits(
   );
 
   if (!rateLimit.allowed) {
-    ctx.logger.log('warn', 'IP rate limit exceeded for trial user', {
+    ctx.logger.log('warn', 'IP daily quota exceeded - anti-abuse protection triggered', {
       deviceId,
       ip: ctx.clientIP,
       creditsRemaining: rateLimit.creditsRemaining,
+      resetsAt: rateLimit.resetsAt,
+      action: 'User must wait until quota resets or purchase a license',
     });
     return fail(ipRateLimitResponse(rateLimit.resetsAt));
   }
 
-  ctx.logger.log('info', 'Trial user credit check passed', {
+  ctx.logger.log('info', 'Trial user passed all credit checks - device and IP quota OK', {
     deviceCredits: deviceBalance.creditsRemaining,
     ipQuotaRemaining: rateLimit.creditsRemaining,
     estimated: estimatedCredits,
+    deviceAfterTransaction: roundToTenth(deviceBalance.creditsRemaining - estimatedCredits),
   });
 
   return ok(undefined);
@@ -149,7 +157,9 @@ export async function deductCredits(
 ): Promise<void> {
   if (user.type === 'licensed') {
     // Licensed user: Record usage via Next.js API
+    // Also updates KV cache with new balance to keep it in sync
     await recordUsage(
+      ctx.env.LICENSE_CACHE,
       ctx.env.HYPERWHISPER_API_URL,
       user.licenseKey!,
       actualCredits,
@@ -174,8 +184,9 @@ export async function deductCredits(
     ]);
   }
 
-  ctx.logger.log('info', 'Credits deducted', {
+  ctx.logger.log('info', 'Credits successfully deducted - user balance updated', {
     userType: user.type,
     credits: actualCredits,
+    storage: user.type === 'licensed' ? 'Supabase database + KV cache' : 'KV (device + IP quota)',
   });
 }

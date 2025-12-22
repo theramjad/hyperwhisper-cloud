@@ -82,10 +82,11 @@ export async function handleStreamingTranscription(
     const mode = ctx.url.searchParams.get('mode') || undefined;
     const initialPrompt = ctx.url.searchParams.get('initial_prompt') || undefined;
 
-    ctx.logger.log('info', 'Streaming transcription starting', {
+    ctx.logger.log('info', 'Streaming transcription pipeline starting - sending audio to Deepgram', {
       contentLength,
       language: language || 'auto',
       userType: auth.value.type,
+      estimatedMinutes: Math.round(contentLength / (1024 * 1024)),
     });
 
     // =========================================================================
@@ -107,7 +108,10 @@ export async function handleStreamingTranscription(
 
     // No speech detected - return early with zero cost
     if (transcriptionResult.source === 'no_speech') {
-      ctx.logger.log('info', 'No speech detected');
+      ctx.logger.log('info', 'Deepgram detected silence - no transcribable speech in audio', {
+        duration: transcriptionResult.durationSeconds,
+        action: 'Returning empty transcript with zero cost',
+      });
       return buildResponse(ctx, transcriptionResult, 0);
     }
 
@@ -125,16 +129,19 @@ export async function handleStreamingTranscription(
       })
     );
 
-    ctx.logger.log('info', 'Streaming transcription complete', {
+    ctx.logger.log('info', 'Streaming transcription complete - returning transcript to client', {
       duration: transcriptionResult.durationSeconds,
       credits: actualCredits,
+      textLength: transcriptionResult.text.length,
+      costUsd: transcriptionResult.costUsd,
     });
 
     return buildResponse(ctx, transcriptionResult, actualCredits);
 
   } catch (error) {
-    ctx.logger.log('error', 'Streaming transcription failed', {
+    ctx.logger.log('error', 'Streaming transcription pipeline failed - internal server error', {
       error: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined,
     });
 
     return errorResponse(500, 'Transcription failed',

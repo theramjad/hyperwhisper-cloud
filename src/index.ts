@@ -46,11 +46,11 @@ export default {
     // Parse URL to determine route
     const url = new URL(request.url);
 
-    logger.log('info', 'Request received', {
+    logger.log('info', 'Incoming request to HyperWhisper Cloud API', {
       method: request.method,
       path: url.pathname,
       ip: clientIP,
-      userAgent: request.headers.get('user-agent')
+      userAgent: request.headers.get('user-agent'),
     });
 
     // Handle CORS preflight
@@ -96,7 +96,11 @@ export default {
     }
 
     // Fallback: Method not allowed for unmatched routes
-    logger.log('warn', 'Unmatched route', { method: request.method, path: url.pathname });
+    logger.log('warn', 'Request to unknown route - returning 405 Method Not Allowed', {
+      method: request.method,
+      path: url.pathname,
+      hint: 'Valid routes: POST /transcribe, POST /post-process, GET /usage',
+    });
     return new Response('Method not allowed', {
       status: 405,
       headers: getCORSHeaders()

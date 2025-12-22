@@ -57,13 +57,17 @@ export async function validateAuth(
 
   // Require at least one identifier
   if (!licenseKey && !deviceId) {
-    ctx.logger.log('warn', 'Request rejected - no identifier provided');
+    ctx.logger.log('warn', 'Authentication failed - no license_key or device_id provided in request', {
+      hint: 'Request must include either license_key or device_id parameter',
+    });
     return fail(noIdentifierResponse());
   }
 
   // LICENSED USER: Validate with Next.js API
   if (licenseKey) {
-    ctx.logger.log('info', 'Authenticating licensed user');
+    ctx.logger.log('info', 'Identifier resolved as license key - validating via Next.js API', {
+      identifier: licenseKey.substring(0, 7) + '...',
+    });
 
     const validation = await validateAndGetCredits(
       ctx.env.LICENSE_CACHE,
@@ -73,7 +77,9 @@ export async function validateAuth(
     );
 
     if (!validation.isValid) {
-      ctx.logger.log('warn', 'Invalid license key');
+      ctx.logger.log('warn', 'License key validation failed - key is invalid or revoked', {
+        action: 'Request will be rejected with 401 Unauthorized',
+      });
       return fail(invalidLicenseResponse());
     }
 
@@ -84,12 +90,17 @@ export async function validateAuth(
     };
 
     ctx.auth = user;
-    ctx.logger.log('info', 'Licensed user authenticated', { credits: user.credits });
+    ctx.logger.log('info', 'Licensed user authenticated successfully - request will proceed', {
+      credits: user.credits,
+      source: validation.credits ? 'Supabase database' : 'default',
+    });
     return ok(user);
   }
 
   // TRIAL USER: Get device balance from KV
-  ctx.logger.log('info', 'Authenticating trial user', { deviceId });
+  ctx.logger.log('info', 'Identifier resolved as device ID - trial user authentication', {
+    deviceId: deviceId!.substring(0, 8) + '...',
+  });
 
   const deviceBalance = await getDeviceBalance(ctx.env.DEVICE_CREDITS, deviceId!, ctx.logger);
 
@@ -100,9 +111,10 @@ export async function validateAuth(
   };
 
   ctx.auth = user;
-  ctx.logger.log('info', 'Trial user authenticated', {
+  ctx.logger.log('info', 'Trial user authenticated successfully - device credits loaded from KV', {
     credits: user.credits,
     totalAllocated: deviceBalance.totalAllocated,
+    remaining: `${user.credits}/${deviceBalance.totalAllocated}`,
   });
 
   return ok(user);
