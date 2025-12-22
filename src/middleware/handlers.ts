@@ -267,11 +267,11 @@ function resolveIdentifier({
   }
 
   if (looksLikeDeviceId(trimmed)) {
-    logger.log('info', 'Identifier resolved as device ID', { identifier: maskIdentifier(trimmed) });
+    logger.log('info', 'Identifier resolved as device ID', { identifier: trimmed });
     return { licenseKey: null, deviceId: deviceId || trimmed };
   }
 
-  logger.log('info', 'Identifier resolved as license key', { identifier: maskIdentifier(trimmed) });
+  logger.log('info', 'Identifier resolved as license key', { identifier: trimmed });
   return { licenseKey: trimmed, deviceId };
 }
 
@@ -288,14 +288,4 @@ function looksLikeDeviceId(value: string): boolean {
   }
 
   return false;
-}
-
-function maskIdentifier(value: string): string {
-  if (value.length <= 8) {
-    return value;
-  }
-
-  const start = value.slice(0, 4);
-  const end = value.slice(-4);
-  return `${start}…${end}`;
 }

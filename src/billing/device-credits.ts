@@ -53,14 +53,14 @@ async function initializeDevice(
     await kv.put(deviceKey, JSON.stringify(initialBalance));
 
     logger.log('info', 'New trial device registered - allocated initial credits in KV', {
-      deviceId: deviceId.substring(0, 8) + '...',
+      deviceId,
       initialCredits: INITIAL_DEVICE_CREDITS,
       estimatedMinutes: Math.floor(INITIAL_DEVICE_CREDITS / CREDITS_PER_MINUTE),
     });
   } catch (error) {
     logger.log('error', 'Failed to initialize trial device in KV - user cannot proceed', {
       error: error instanceof Error ? error.message : 'Unknown error',
-      deviceId: deviceId.substring(0, 8) + '...',
+      deviceId,
     });
     throw error;
   }
@@ -110,7 +110,7 @@ export async function getDeviceBalance(
     const minutesRemaining = Math.floor(creditsRemaining / CREDITS_PER_MINUTE);
 
     logger.log('info', 'Trial device balance loaded from KV', {
-      deviceId: deviceId.substring(0, 8) + '...',
+      deviceId,
       creditsRemaining: balance.creditsRemaining,
       creditsUsed: balance.creditsUsed,
       minutesRemaining,
@@ -127,7 +127,7 @@ export async function getDeviceBalance(
   } catch (error) {
     logger.log('error', 'KV read failed for device balance - treating as exhausted for safety', {
       error: error instanceof Error ? error.message : 'Unknown error',
-      deviceId: deviceId.substring(0, 8) + '...',
+      deviceId,
       action: 'Returning zero balance to prevent unauthorized usage',
     });
 
@@ -177,7 +177,7 @@ export async function deductDeviceCredits(
     await kv.put(deviceKey, JSON.stringify(updatedBalance));
 
     logger.log('info', 'Trial device credits deducted - balance updated in KV', {
-      deviceId: deviceId.substring(0, 8) + '...',
+      deviceId,
       creditsDeducted: creditsToDeduct,
       previousRemaining: currentBalance.creditsRemaining,
       newRemaining: newCreditsRemaining,
@@ -195,7 +195,7 @@ export async function deductDeviceCredits(
   } catch (error) {
     logger.log('error', 'Failed to deduct trial device credits from KV - balance may be incorrect', {
       error: error instanceof Error ? error.message : 'Unknown error',
-      deviceId: deviceId.substring(0, 8) + '...',
+      deviceId,
       creditsToDeduct,
       action: 'Request succeeded but credits not deducted - potential abuse vector',
     });

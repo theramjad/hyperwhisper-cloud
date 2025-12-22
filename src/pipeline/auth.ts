@@ -66,7 +66,7 @@ export async function validateAuth(
   // LICENSED USER: Validate with Next.js API
   if (licenseKey) {
     ctx.logger.log('info', 'Identifier resolved as license key - validating via Next.js API', {
-      identifier: licenseKey.substring(0, 7) + '...',
+      identifier: licenseKey,
     });
 
     const validation = await validateAndGetCredits(
@@ -99,7 +99,7 @@ export async function validateAuth(
 
   // TRIAL USER: Get device balance from KV
   ctx.logger.log('info', 'Identifier resolved as device ID - trial user authentication', {
-    deviceId: deviceId!.substring(0, 8) + '...',
+    deviceId: deviceId!,
   });
 
   const deviceBalance = await getDeviceBalance(ctx.env.DEVICE_CREDITS, deviceId!, ctx.logger);
