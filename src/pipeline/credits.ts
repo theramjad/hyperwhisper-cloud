@@ -151,7 +151,6 @@ export async function deductCredits(
     // Licensed user: Record usage via Next.js API
     await recordUsage(
       ctx.env.HYPERWHISPER_API_URL,
-      ctx.env.HYPERWHISPER_API_KEY,
       user.licenseKey!,
       actualCredits,
       metadata,

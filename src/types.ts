@@ -21,8 +21,8 @@ export interface Env {
 
   // License/Credits API (Next.js backend)
   // CF Workers call these endpoints for license validation and credit management
+  // The license key itself acts as authentication - no separate API key needed
   HYPERWHISPER_API_URL: string; // Base URL (e.g., "https://hyperwhisper.com")
-  HYPERWHISPER_API_KEY: string; // API key for authenticating with Next.js endpoints
 
   // R2 Storage
   // Bucket for temporary audio storage (large file transcription >30MB)

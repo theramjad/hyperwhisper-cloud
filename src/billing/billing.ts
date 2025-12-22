@@ -28,7 +28,6 @@ import { roundToTenth, roundUpToTenth } from '../utils/utils';
  * @param licenseCache - KV namespace for license cache
  * @param licenseKey - License key to validate
  * @param apiUrl - Base URL for Next.js API (e.g., https://hyperwhisper.com)
- * @param apiKey - API key for authentication
  * @param logger - Logger instance
  * @param forceRefresh - If true, bypass cache and fetch fresh data from API
  * @returns License validation result with credit balance
@@ -37,7 +36,6 @@ export async function validateAndGetCredits(
   licenseCache: KVNamespace,
   licenseKey: string,
   apiUrl: string,
-  apiKey: string,
   logger: Logger,
   forceRefresh: boolean = false
 ): Promise<{ isValid: boolean; credits: number }> {
@@ -62,7 +60,6 @@ export async function validateAndGetCredits(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-API-Key': apiKey,
       },
       body: JSON.stringify({
         license_key: licenseKey,
@@ -131,7 +128,6 @@ export async function validateAndGetCredits(
  * @param licenseCache - KV namespace for license cache
  * @param licenseKey - License key to query
  * @param apiUrl - Base URL for Next.js API (e.g., https://hyperwhisper.com)
- * @param apiKey - API key for authentication
  * @param logger - Logger instance
  * @returns Credit balance or error
  */
@@ -139,7 +135,6 @@ export async function getCreditsBalance(
   licenseCache: KVNamespace,
   licenseKey: string,
   apiUrl: string,
-  apiKey: string,
   logger: Logger
 ): Promise<{ credits: number; error?: string }> {
   try {
@@ -147,9 +142,6 @@ export async function getCreditsBalance(
       `${apiUrl}/api/license/credits?license_key=${encodeURIComponent(licenseKey)}`,
       {
         method: 'GET',
-        headers: {
-          'X-API-Key': apiKey,
-        },
       }
     );
 
@@ -201,7 +193,6 @@ export async function getCreditsBalance(
  * Called after successful transcription
  *
  * @param apiUrl - Base URL for Next.js API
- * @param apiKey - API key for authentication
  * @param licenseKey - License key for the user
  * @param creditsUsed - Number of credits to deduct
  * @param metadata - Additional event metadata
@@ -209,7 +200,6 @@ export async function getCreditsBalance(
  */
 export async function recordUsage(
   apiUrl: string,
-  apiKey: string,
   licenseKey: string,
   creditsUsed: number,
   metadata: Record<string, unknown>,
@@ -220,7 +210,6 @@ export async function recordUsage(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-API-Key': apiKey,
       },
       body: JSON.stringify({
         license_key: licenseKey,

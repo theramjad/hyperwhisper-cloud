@@ -88,7 +88,6 @@ export async function handleUsageQuery(
             env.LICENSE_CACHE,
             licenseKey,
             env.HYPERWHISPER_API_URL,
-            env.HYPERWHISPER_API_KEY,
             logger
           );
 
@@ -101,7 +100,6 @@ export async function handleUsageQuery(
               env.LICENSE_CACHE,
               licenseKey,
               env.HYPERWHISPER_API_URL,
-              env.HYPERWHISPER_API_KEY,
               logger,
               true // forceRefresh
             );
@@ -117,7 +115,6 @@ export async function handleUsageQuery(
             env.LICENSE_CACHE,
             licenseKey,
             env.HYPERWHISPER_API_URL,
-            env.HYPERWHISPER_API_KEY,
             logger,
             true // forceRefresh
           );
@@ -130,7 +127,6 @@ export async function handleUsageQuery(
           env.LICENSE_CACHE,
           licenseKey,
           env.HYPERWHISPER_API_URL,
-          env.HYPERWHISPER_API_KEY,
           logger,
           false
         );

@@ -69,7 +69,6 @@ export async function validateAuth(
       ctx.env.LICENSE_CACHE,
       licenseKey,
       ctx.env.HYPERWHISPER_API_URL,
-      ctx.env.HYPERWHISPER_API_KEY,
       ctx.logger
     );
 
