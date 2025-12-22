@@ -1,25 +1,29 @@
 // STREAMING TRANSCRIPTION HANDLER
 // Handler for POST /transcribe endpoint - zero-buffer streaming to Deepgram
 //
-// KEY MEMORY OPTIMIZATION:
-// This handler pipes request.body (ReadableStream) directly to Deepgram
-// without buffering the audio in memory. This reduces memory usage from
-// ~34MB (2x file size for multipart) to ~0MB for large files.
-//
 // FLOW:
-// 1. Validate Content-Type is audio/*
-// 2. Validate Content-Length header exists (required for credit estimation)
-// 3. Extract auth and options from query params
-// 4. Estimate credits from Content-Length BEFORE consuming stream
-// 5. Validate credits (Polar meter or device credits)
-// 6. Pipe request.body directly to Deepgram
-// 7. Calculate actual cost and deduct credits
-// 8. Return simplified response
+// 1. Pipeline: IP check → Auth → Credit validation
+// 2. Validate streaming-specific headers (Content-Type, Content-Length)
+// 3. Transcribe via Deepgram (streaming or R2 for large files)
+// 4. Deduct credits (background)
+// 5. Return response
 
 import type { Env, StreamingTranscriptionResponse } from '../types';
-import { Logger } from '../utils/logger';
-import { roundToTenth, roundUpToTenth, retryWithBackoff } from '../utils/utils';
-import { getCORSHeaders } from '../middleware/handlers';
+import {
+  createContext,
+  checkIPBlocked,
+  validateAuth,
+  extractAuthFromQuery,
+  validateCredits,
+  deductCredits,
+  estimateCreditsFromSize,
+  jsonResponse,
+  errorResponse,
+  CORS_HEADERS,
+  fileTooLargeResponse,
+  missingContentLengthResponse,
+  invalidContentTypeResponse,
+} from '../pipeline';
 import {
   transcribeWithDeepgramStream,
   transcribeWithDeepgramUrl,
@@ -32,653 +36,275 @@ import {
   generateR2Key,
 } from '../utils/r2-utils';
 import { formatUsd } from '../billing/cost-calculator';
-import {
-  validateAndGetCredits,
-  recordUsage,
-  calculateCreditsForCost,
-  hasSufficientBalance,
-} from '../billing/billing';
-import {
-  getDeviceBalance,
-  deductDeviceCredits,
-  hasDeviceSufficientCredits,
-} from '../billing/device-credits';
-import {
-  checkRateLimit,
-  incrementUsage,
-  isIPBlocked,
-  formatRateLimitHeaders,
-} from '../middleware/rate-limiter';
-import { CREDITS_PER_MINUTE, TRIAL_CREDIT_ALLOCATION } from '../constants/credits';
+import { calculateCreditsForCost } from '../billing/billing';
+import { roundToTenth } from '../utils/utils';
 
-// ============================================================================
-// CREDIT ESTIMATION
-// ============================================================================
-
-// Approximate audio bitrate for credit estimation
-// Most compressed audio (m4a, mp3, aac) is ~128kbps = 16KB/sec
-// This means ~1MB ≈ 60 seconds of audio
-const BYTES_PER_MINUTE_ESTIMATE = 1024 * 1024; // 1MB per minute (conservative)
-
-// LARGE FILE THRESHOLD FOR R2 UPLOAD PATH
-// Files larger than this will be uploaded to R2 first, then Deepgram fetches via URL.
-// This bypasses Cloudflare Worker streaming issues with large files.
-//
-// WHY 30MB:
-// - Cloudflare Worker streaming fails for large files (>30MB) with Deepgram
-// - Most microphone recordings are <10MB (a few minutes)
-// - File imports (podcasts, lectures) can be 50-200MB
-// - 30MB provides safety margin while keeping small files fast (no R2 overhead)
+// Large files (>30MB) use R2 upload path instead of direct streaming
+// Cloudflare Workers chunked encoding causes issues with Deepgram for large files
 const LARGE_FILE_THRESHOLD = 30 * 1024 * 1024; // 30MB
+const MAX_AUDIO_SIZE = 2 * 1024 * 1024 * 1024; // 2GB (Deepgram limit)
 
 /**
- * ESTIMATE CREDITS FROM CONTENT-LENGTH
- * Uses file size to approximate audio duration before consuming the stream
- *
- * This is a rough estimate - actual cost will be calculated from Deepgram's
- * reported duration. We use this to validate credits BEFORE streaming starts.
- *
- * @param contentLength - Content-Length header value in bytes
- * @returns Estimated credits needed
- */
-function estimateCreditsFromContentLength(contentLength: number): number {
-  // Estimate duration: ~1MB per minute of compressed audio
-  const estimatedMinutes = contentLength / BYTES_PER_MINUTE_ESTIMATE;
-  const estimatedSeconds = Math.max(10, estimatedMinutes * 60);
-
-  // Convert to credits using shared rate
-  const estimatedCredits = (estimatedSeconds / 60) * CREDITS_PER_MINUTE;
-
-  return Math.max(0.1, roundUpToTenth(estimatedCredits));
-}
-
-// ============================================================================
-// MAIN HANDLER
-// ============================================================================
-
-/**
- * STREAMING TRANSCRIPTION HANDLER
- * Handles POST /transcribe requests with zero-buffer streaming
- *
- * Query Parameters:
- * - license_key: Licensed user authentication (required if no device_id)
- * - device_id: Trial user authentication (required if no license_key)
- * - language: ISO language code or "auto" (optional)
- * - mode: Transcription mode for logging (optional)
- * - initial_prompt: Comma-separated vocabulary terms (optional)
- *
- * Headers:
- * - Content-Type: Must be audio/* (e.g., audio/mp4, audio/mpeg)
- * - Content-Length: Required for credit estimation
- *
- * Body:
- * - Raw binary audio data (streamed directly to Deepgram)
- *
- * @param request - Incoming HTTP request
- * @param env - Environment variables
- * @param ctx - Execution context for waitUntil
- * @param logger - Logger instance
- * @param clientIP - Client IP address
- * @returns HTTP response with transcription result
+ * Handle POST /transcribe - streaming transcription
  */
 export async function handleStreamingTranscription(
   request: Request,
   env: Env,
-  ctx: ExecutionContext,
-  logger: Logger,
+  executionCtx: ExecutionContext,
+  _logger: unknown, // Deprecated: context creates its own logger
   clientIP: string
 ): Promise<Response> {
-  const requestId = crypto.randomUUID();
-  const url = new URL(request.url);
+  const ctx = createContext(request, env, executionCtx, clientIP);
 
   try {
-    // ========================================================================
-    // STEP 1: Check if IP is blocked
-    // ========================================================================
-    if (await isIPBlocked(env.RATE_LIMITER, clientIP)) {
-      logger.log('warn', 'Blocked IP attempted streaming access', { ip: clientIP });
-      return new Response(JSON.stringify({
-        error: 'Access denied',
-        message: 'Your IP has been temporarily blocked due to abuse'
-      }), {
-        status: 403,
-        headers: { ...getCORSHeaders(), 'content-type': 'application/json' }
-      });
-    }
+    // =========================================================================
+    // PIPELINE: IP Check → Auth → Credits
+    // =========================================================================
 
-    // ========================================================================
-    // STEP 2: Validate Content-Type header
-    // ========================================================================
-    const contentType = request.headers.get('content-type') || '';
+    const ipCheck = await checkIPBlocked(ctx);
+    if (!ipCheck.ok) return ipCheck.response;
 
-    if (!contentType.startsWith('audio/')) {
-      logger.log('warn', 'Invalid Content-Type for streaming', { contentType });
-      return new Response(JSON.stringify({
-        error: 'Invalid Content-Type',
-        message: 'Content-Type must be audio/* (e.g., audio/mp4, audio/mpeg, audio/wav)',
-        received: contentType
-      }), {
-        status: 400,
-        headers: { ...getCORSHeaders(), 'content-type': 'application/json' }
-      });
-    }
+    // Validate streaming-specific headers BEFORE auth (fail fast)
+    const headerValidation = validateStreamingHeaders(ctx);
+    if (!headerValidation.ok) return headerValidation.response;
+    const { contentType, contentLength } = headerValidation.value;
 
-    // ========================================================================
-    // STEP 3: Validate Content-Length header
-    // ========================================================================
-    const contentLengthHeader = request.headers.get('content-length');
+    const authInput = extractAuthFromQuery(ctx);
+    const auth = await validateAuth(ctx, authInput);
+    if (!auth.ok) return auth.response;
 
-    if (!contentLengthHeader) {
-      logger.log('warn', 'Missing Content-Length header for streaming');
-      return new Response(JSON.stringify({
-        error: 'Missing Content-Length',
-        message: 'Content-Length header is required for streaming transcription'
-      }), {
-        status: 400,
-        headers: { ...getCORSHeaders(), 'content-type': 'application/json' }
-      });
-    }
+    const estimatedCredits = estimateCreditsFromSize(contentLength);
+    const credits = await validateCredits(ctx, auth.value, estimatedCredits);
+    if (!credits.ok) return credits.response;
 
-    const contentLength = parseInt(contentLengthHeader, 10);
+    // Extract optional params
+    const language = ctx.url.searchParams.get('language') || undefined;
+    const mode = ctx.url.searchParams.get('mode') || undefined;
+    const initialPrompt = ctx.url.searchParams.get('initial_prompt') || undefined;
 
-    if (isNaN(contentLength) || contentLength <= 0) {
-      logger.log('warn', 'Invalid Content-Length value', { contentLengthHeader });
-      return new Response(JSON.stringify({
-        error: 'Invalid Content-Length',
-        message: 'Content-Length must be a positive integer'
-      }), {
-        status: 400,
-        headers: { ...getCORSHeaders(), 'content-type': 'application/json' }
-      });
-    }
-
-    // Enforce maximum file size (2 GB - Deepgram's limit)
-    const MAX_AUDIO_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB in bytes
-    if (contentLength > MAX_AUDIO_SIZE) {
-      logger.log('warn', 'Audio file exceeds maximum size', {
-        contentLength,
-        maxSize: MAX_AUDIO_SIZE,
-      });
-      return new Response(JSON.stringify({
-        error: 'File too large',
-        message: `Audio file must be 2 GB or smaller. Your file is ${(contentLength / (1024 * 1024)).toFixed(2)} MB.`,
-        max_size_mb: 2048,
-        actual_size_mb: parseFloat((contentLength / (1024 * 1024)).toFixed(2))
-      }), {
-        status: 413, // Payload Too Large
-        headers: { ...getCORSHeaders(), 'content-type': 'application/json' }
-      });
-    }
-
-    // ========================================================================
-    // STEP 4: Extract parameters from query string
-    // ========================================================================
-    const licenseKey = url.searchParams.get('license_key') || undefined;
-    const deviceId = url.searchParams.get('device_id') || undefined;
-    const language = url.searchParams.get('language') || undefined;
-    const mode = url.searchParams.get('mode') || undefined;
-    const initialPrompt = url.searchParams.get('initial_prompt') || undefined;
-
-    logger.log('info', 'Streaming transcription request', {
-      contentType,
+    ctx.logger.log('info', 'Streaming transcription starting', {
       contentLength,
-      hasLicenseKey: !!licenseKey,
-      hasDeviceId: !!deviceId,
       language: language || 'auto',
-      mode,
-      hasInitialPrompt: !!initialPrompt,
+      userType: auth.value.type,
     });
 
-    // ========================================================================
-    // STEP 5: Validate authentication
-    // ========================================================================
-    if (!licenseKey && !deviceId) {
-      logger.log('warn', 'Streaming request rejected - no identifier provided');
-      return new Response(JSON.stringify({
-        error: 'Identifier required',
-        message: 'You must provide either a license_key or device_id query parameter'
-      }), {
-        status: 401,
-        headers: { ...getCORSHeaders(), 'content-type': 'application/json' }
-      });
-    }
-
-    // ========================================================================
-    // STEP 6: Estimate credits BEFORE consuming stream
-    // ========================================================================
-    const estimatedCredits = estimateCreditsFromContentLength(contentLength);
-
-    logger.log('info', 'Credit estimation from Content-Length', {
-      contentLength,
-      estimatedCredits,
-    });
-
-    // ========================================================================
-    // STEP 7: Validate credits (licensed vs trial user)
-    // ========================================================================
-    let isLicensed = false;
-    let isTrial = false;
-    let licensedCredits = 0;
-
-    if (licenseKey) {
-      // LICENSED USER: Validate license only (credit check temporarily disabled)
-      // TODO: Re-enable credit checking once billing is fully tested
-      logger.log('info', 'Processing streaming request for licensed user');
-
-      // Validate license (skip credit balance check for now)
-      const validation = await validateAndGetCredits(
-        env.LICENSE_CACHE,
-        licenseKey,
-        env.HYPERWHISPER_API_URL,
-        env.HYPERWHISPER_API_KEY,
-        logger
-      );
-
-      if (!validation.isValid) {
-        logger.log('warn', 'Invalid license key provided for streaming');
-        return new Response(JSON.stringify({
-          error: 'Invalid license',
-          message: 'The provided license key is invalid or expired'
-        }), {
-          status: 401,
-          headers: { ...getCORSHeaders(), 'content-type': 'application/json' }
-        });
-      }
-
-      isLicensed = true;
-      licensedCredits = validation.credits;
-
-      // TEMPORARILY DISABLED: Credit balance check for licensed users
-      // const balanceCredits = roundToTenth(licensedCredits);
-      //
-      // if (!hasSufficientBalance(balanceCredits, estimatedCredits)) {
-      //   logger.log('warn', 'Insufficient balance for licensed user (streaming)', {
-      //     balance: balanceCredits,
-      //     estimated: estimatedCredits
-      //   });
-      //
-      //   const minutesRemaining = Math.floor(balanceCredits / CREDITS_PER_MINUTE);
-      //   const minutesRequired = Math.ceil(estimatedCredits / CREDITS_PER_MINUTE);
-      //
-      //   return new Response(JSON.stringify({
-      //     error: 'Insufficient credits',
-      //     message: `You have ${balanceCredits.toFixed(1)} credits remaining. This transcription requires approximately ${estimatedCredits.toFixed(1)} credits.`,
-      //     credits_remaining: balanceCredits,
-      //     minutes_remaining: minutesRemaining,
-      //     minutes_required: minutesRequired,
-      //     credits_per_minute: CREDITS_PER_MINUTE,
-      //   }), {
-      //     status: 402, // Payment Required
-      //     headers: { ...getCORSHeaders(), 'content-type': 'application/json' }
-      //   });
-      // }
-
-      logger.log('info', 'Licensed user authorized for streaming (credit check disabled)', {
-        estimated: estimatedCredits
-      });
-
-    } else if (deviceId) {
-      // TRIAL USER: Check device credits AND IP rate limit
-      isTrial = true;
-
-      logger.log('info', 'Processing streaming request for trial user', { deviceId });
-
-      // STEP 7a: Check device credit balance
-      const deviceBalance = await getDeviceBalance(env.DEVICE_CREDITS, deviceId, logger);
-
-      if (!hasDeviceSufficientCredits(deviceBalance, estimatedCredits)) {
-        logger.log('warn', 'Insufficient device credits for trial user (streaming)', {
-          deviceId,
-          balance: deviceBalance.creditsRemaining,
-          estimated: estimatedCredits
-        });
-
-        const minutesRemaining = Math.floor(deviceBalance.creditsRemaining / CREDITS_PER_MINUTE);
-        const minutesRequired = Math.ceil(estimatedCredits / CREDITS_PER_MINUTE);
-
-        return new Response(JSON.stringify({
-          error: 'Insufficient credits',
-          message: `Your trial has ${deviceBalance.creditsRemaining.toFixed(1)} credits remaining. This transcription requires approximately ${estimatedCredits.toFixed(1)} credits. Please upgrade to continue.`,
-          credits_remaining: deviceBalance.creditsRemaining,
-          credits_used: deviceBalance.creditsUsed,
-          total_allocated: deviceBalance.totalAllocated,
-          minutes_remaining: minutesRemaining,
-          minutes_required: minutesRequired,
-          credits_per_minute: CREDITS_PER_MINUTE,
-        }), {
-          status: 402, // Payment Required
-          headers: { ...getCORSHeaders(), 'content-type': 'application/json' }
-        });
-      }
-
-      // STEP 7b: Check IP rate limit (anti-abuse)
-      const rateLimitStatus = await checkRateLimit(
-        env.RATE_LIMITER,
-        clientIP,
-        estimatedCredits,
-        logger
-      );
-
-      if (!rateLimitStatus.allowed) {
-        logger.log('warn', 'IP rate limit exceeded for trial user (streaming)', {
-          deviceId,
-          ip: clientIP,
-          used: rateLimitStatus.creditsUsed,
-          remaining: rateLimitStatus.creditsRemaining
-        });
-
-        return new Response(JSON.stringify({
-          error: 'Rate limit exceeded',
-          message: `IP-based rate limit exceeded. You have used ${rateLimitStatus.creditsUsed.toFixed(1)} of ${TRIAL_CREDIT_ALLOCATION} credits today from this network. Resets at ${rateLimitStatus.resetsAt.toISOString()}.`,
-          credits_remaining: rateLimitStatus.creditsRemaining,
-          resets_at: rateLimitStatus.resetsAt.toISOString(),
-        }), {
-          status: 429, // Too Many Requests
-          headers: {
-            ...getCORSHeaders(),
-            ...formatRateLimitHeaders(rateLimitStatus),
-            'content-type': 'application/json',
-          }
-        });
-      }
-
-      logger.log('info', 'Trial user authorized for streaming', {
-        deviceId,
-        deviceCredits: deviceBalance.creditsRemaining,
-        ipQuotaRemaining: rateLimitStatus.creditsRemaining
-      });
-    }
-
-    // ========================================================================
-    // STEP 8: Validate API key
-    // ========================================================================
-    if (!env.DEEPGRAM_API_KEY || env.DEEPGRAM_API_KEY.trim().length === 0) {
-      logger.log('error', 'Missing Deepgram API key');
-      return new Response(JSON.stringify({
-        error: 'Server misconfigured',
-        message: 'Deepgram API key is not set on the worker',
-        requestId,
-      }), {
-        status: 500,
-        headers: {
-          ...getCORSHeaders(),
-          'content-type': 'application/json',
-          'X-Request-ID': requestId,
-        }
-      });
-    }
-
-    // ========================================================================
-    // STEP 9: Transcribe audio (hybrid approach based on file size)
-    // ========================================================================
-    const sttStartTime = Date.now();
+    // =========================================================================
+    // TRANSCRIBE
+    // =========================================================================
 
     const audioBody = request.body;
-
     if (!audioBody) {
-      logger.log('error', 'Request body is null for streaming');
-      return new Response(JSON.stringify({
-        error: 'Empty body',
-        message: 'Request body is empty'
-      }), {
-        status: 400,
-        headers: { ...getCORSHeaders(), 'content-type': 'application/json' }
-      });
+      return errorResponse(400, 'Empty body', 'Request body is empty');
     }
 
-    // HYBRID TRANSCRIPTION APPROACH:
-    // - Small files (<30MB): Stream directly to Deepgram (faster, no R2 overhead)
-    // - Large files (>=30MB): Upload to R2, use URL-based transcription (reliable)
-    //
-    // WHY:
-    // Cloudflare Workers uses Transfer-Encoding: chunked for ReadableStream bodies,
-    // which causes Deepgram to fail with 422 errors for large files.
-    // R2 + URL-based transcription bypasses this entirely.
+    const transcriptionResult = await transcribeAudio(
+      ctx, audioBody, contentType, contentLength, language, initialPrompt
+    );
 
-    let transcriptionResult: StreamingTranscriptionResult;
+    // =========================================================================
+    // HANDLE RESULT
+    // =========================================================================
 
-    if (contentLength >= LARGE_FILE_THRESHOLD) {
-      // ====================================================================
-      // LARGE FILE PATH: R2 upload + URL-based transcription
-      // ====================================================================
-      logger.log('info', 'Large file detected, using R2 upload path', {
-        contentLength,
-        contentLengthMB: (contentLength / (1024 * 1024)).toFixed(2),
-        threshold: LARGE_FILE_THRESHOLD,
-      });
-
-      // Generate unique key for this audio file
-      const r2Key = generateR2Key(contentType);
-
-      try {
-        // STEP 9a: Upload audio stream to R2 (streams without buffering)
-        await uploadToR2(
-          env.AUDIO_BUCKET,
-          r2Key,
-          audioBody as ReadableStream<Uint8Array>,
-          contentType
-        );
-
-        logger.log('info', 'Audio uploaded to R2', { r2Key });
-
-        // STEP 9b: Generate presigned URL for Deepgram to fetch
-        // Note: We need to get bucket name from wrangler.toml config
-        // Since R2Bucket binding doesn't expose the name, we derive it from environment
-        const bucketName = (env as any).ENVIRONMENT === 'production'
-          ? 'hyperwhisper-audio-temp-prod'
-          : 'hyperwhisper-audio-temp-dev';
-
-        const presignedUrl = await generateR2PresignedUrl(
-          env.R2_ACCOUNT_ID,
-          env.R2_ACCESS_KEY_ID,
-          env.R2_SECRET_ACCESS_KEY,
-          bucketName,
-          r2Key,
-          15 * 60 // 15 minute expiry
-        );
-
-        logger.log('info', 'Generated presigned URL for Deepgram', {
-          r2Key,
-          expiresInMinutes: 15,
-        });
-
-        // STEP 9c: Send URL to Deepgram (Deepgram fetches from R2)
-        transcriptionResult = await transcribeWithDeepgramUrl(
-          presignedUrl,
-          language,
-          initialPrompt,
-          env,
-          logger
-        );
-
-        // STEP 9d: Clean up R2 file after transcription (non-blocking)
-        ctx.waitUntil(
-          deleteFromR2(env.AUDIO_BUCKET, r2Key).catch(err => {
-            logger.log('warn', 'Failed to delete R2 file (will be auto-deleted by lifecycle rule)', {
-              r2Key,
-              error: String(err),
-            });
-          })
-        );
-
-      } catch (error) {
-        // Attempt cleanup on error (non-blocking)
-        ctx.waitUntil(
-          deleteFromR2(env.AUDIO_BUCKET, r2Key).catch(() => {})
-        );
-        throw error;
-      }
-
-    } else {
-      // ====================================================================
-      // SMALL FILE PATH: Direct streaming to Deepgram
-      // ====================================================================
-      logger.log('info', 'Small file, using direct streaming path', {
-        contentLength,
-        contentLengthMB: (contentLength / (1024 * 1024)).toFixed(2),
-        threshold: LARGE_FILE_THRESHOLD,
-      });
-
-      transcriptionResult = await transcribeWithDeepgramStream(
-        audioBody,
-        contentType,
-        contentLength,
-        language,
-        initialPrompt,
-        env,
-        logger
-      );
-    }
-
-    const sttLatencyMs = Date.now() - sttStartTime;
-
-    logger.log('info', 'Streaming transcription complete', {
-      sttLatencyMs,
-      sttProvider: 'deepgram-nova3',
-      detectedLanguage: transcriptionResult.language,
-      audioDuration: transcriptionResult.durationSeconds,
-      textLength: transcriptionResult.text.length,
-      costUsd: transcriptionResult.costUsd,
-    });
-
-    // ========================================================================
-    // STEP 10: Handle no speech detected
-    // ========================================================================
+    // No speech detected - return early with zero cost
     if (transcriptionResult.source === 'no_speech') {
-      logger.log('info', 'No speech detected in streaming audio', { sttLatencyMs });
-
-      const response: StreamingTranscriptionResponse = {
-        text: '',
-        language: transcriptionResult.language,
-        duration: 0,
-        cost: { usd: 0, credits: 0 },
-        metadata: {
-          request_id: requestId,
-          stt_provider: 'deepgram-nova3',
-        },
-        no_speech_detected: true,
-      };
-
-      return new Response(JSON.stringify(response), {
-        status: 200,
-        headers: {
-          ...getCORSHeaders(),
-          'content-type': 'application/json',
-          'X-Request-ID': requestId,
-          'X-Credits-Used': '0',
-        }
-      });
+      ctx.logger.log('info', 'No speech detected');
+      return buildResponse(ctx, transcriptionResult, 0);
     }
 
-    // ========================================================================
-    // STEP 11: Calculate actual cost and deduct credits
-    // ========================================================================
+    // Calculate actual credits and deduct in background
     const actualCredits = roundToTenth(calculateCreditsForCost(transcriptionResult.costUsd));
 
-    // Update usage tracking
-    if (isLicensed && licenseKey) {
-      // LICENSED USER: Record usage via Next.js API
-      ctx.waitUntil(
-        recordUsage(
-          env.HYPERWHISPER_API_URL,
-          env.HYPERWHISPER_API_KEY,
-          licenseKey,
-          actualCredits,
-          {
-            audio_duration_seconds: transcriptionResult.durationSeconds,
-            transcription_cost_usd: transcriptionResult.costUsd,
-            total_cost_usd: transcriptionResult.costUsd,
-            language: transcriptionResult.language ?? language ?? 'auto',
-            mode,
-            endpoint: '/transcribe',
-            streaming: true,
-          },
-          logger
-        )
-      );
+    ctx.ctx.waitUntil(
+      deductCredits(ctx, auth.value, actualCredits, {
+        audio_duration_seconds: transcriptionResult.durationSeconds,
+        transcription_cost_usd: transcriptionResult.costUsd,
+        language: transcriptionResult.language ?? language ?? 'auto',
+        mode,
+        endpoint: '/transcribe',
+        streaming: true,
+      })
+    );
 
-      logger.log('info', 'Usage event queued for recording (streaming)', {
-        credits: actualCredits
-      });
-
-    } else if (isTrial && deviceId) {
-      // TRIAL USER: Deduct from device credits AND IP quota
-
-      // Deduct from device credits
-      ctx.waitUntil(
-        deductDeviceCredits(env.DEVICE_CREDITS, deviceId, actualCredits, logger)
-      );
-
-      // Also deduct from IP rate limit (anti-abuse)
-      ctx.waitUntil(
-        incrementUsage(env.RATE_LIMITER, clientIP, actualCredits, logger)
-      );
-
-      logger.log('info', 'Usage tracked for trial user (streaming)', {
-        deviceId,
-        ip: clientIP,
-        credits: actualCredits
-      });
-    }
-
-    // ========================================================================
-    // STEP 12: Return response
-    // ========================================================================
-    const requestLatencyMs = logger.getElapsedTime();
-
-    logger.log('info', 'Streaming request completed successfully', {
-      requestLatencyMs,
-      sttLatencyMs,
-      sttProvider: 'deepgram-nova3',
-      transcriptChars: transcriptionResult.text.length,
-      costUsd: transcriptionResult.costUsd,
-      creditsDebited: actualCredits,
-      isLicensed,
-    });
-
-    const response: StreamingTranscriptionResponse = {
-      text: transcriptionResult.text,
-      language: transcriptionResult.language,
+    ctx.logger.log('info', 'Streaming transcription complete', {
       duration: transcriptionResult.durationSeconds,
-      cost: {
-        usd: transcriptionResult.costUsd,
-        credits: actualCredits,
-      },
-      metadata: {
-        request_id: requestId,
-        stt_provider: 'deepgram-nova3',
-      },
-    };
-
-    return new Response(JSON.stringify(response), {
-      status: 200,
-      headers: {
-        ...getCORSHeaders(),
-        'content-type': 'application/json',
-        'X-Request-ID': requestId,
-        'X-STT-Provider': 'deepgram-nova3',
-        'X-Total-Cost-Usd': formatUsd(transcriptionResult.costUsd),
-        'X-Credits-Used': actualCredits.toFixed(1),
-      }
+      credits: actualCredits,
     });
+
+    return buildResponse(ctx, transcriptionResult, actualCredits);
 
   } catch (error) {
-    logger.log('error', 'Streaming transcription failed', {
+    ctx.logger.log('error', 'Streaming transcription failed', {
       error: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined
     });
 
-    return new Response(JSON.stringify({
-      error: 'Transcription failed',
-      details: error instanceof Error ? error.message : 'Unknown error',
-      requestId
-    }), {
-      status: 500,
-      headers: {
-        ...getCORSHeaders(),
-        'content-type': 'application/json',
-        'X-Request-ID': requestId
-      }
-    });
+    return errorResponse(500, 'Transcription failed',
+      error instanceof Error ? error.message : 'Unknown error',
+      { requestId: ctx.requestId }
+    );
   }
+}
+
+// =============================================================================
+// HELPER FUNCTIONS
+// =============================================================================
+
+interface HeaderValidation {
+  contentType: string;
+  contentLength: number;
+}
+
+/**
+ * Validate streaming-specific headers (Content-Type, Content-Length).
+ */
+function validateStreamingHeaders(ctx: import('../pipeline').RequestContext):
+  import('../pipeline').PipelineResult<HeaderValidation> {
+
+  const contentType = ctx.request.headers.get('content-type') || '';
+
+  if (!contentType.startsWith('audio/')) {
+    ctx.logger.log('warn', 'Invalid Content-Type', { contentType });
+    return { ok: false, response: invalidContentTypeResponse('audio/*', contentType) };
+  }
+
+  const contentLengthHeader = ctx.request.headers.get('content-length');
+  if (!contentLengthHeader) {
+    ctx.logger.log('warn', 'Missing Content-Length');
+    return { ok: false, response: missingContentLengthResponse() };
+  }
+
+  const contentLength = parseInt(contentLengthHeader, 10);
+  if (isNaN(contentLength) || contentLength <= 0) {
+    ctx.logger.log('warn', 'Invalid Content-Length', { contentLengthHeader });
+    return { ok: false, response: errorResponse(400, 'Invalid Content-Length', 'Content-Length must be a positive integer') };
+  }
+
+  if (contentLength > MAX_AUDIO_SIZE) {
+    ctx.logger.log('warn', 'File too large', { contentLength });
+    return { ok: false, response: fileTooLargeResponse(contentLength, MAX_AUDIO_SIZE) };
+  }
+
+  return { ok: true, value: { contentType, contentLength } };
+}
+
+/**
+ * Transcribe audio using appropriate path (direct stream or R2 for large files).
+ */
+async function transcribeAudio(
+  ctx: import('../pipeline').RequestContext,
+  audioBody: ReadableStream<Uint8Array>,
+  contentType: string,
+  contentLength: number,
+  language?: string,
+  initialPrompt?: string
+): Promise<StreamingTranscriptionResult> {
+
+  if (contentLength >= LARGE_FILE_THRESHOLD) {
+    return transcribeViaR2(ctx, audioBody, contentType, language, initialPrompt);
+  }
+
+  return transcribeWithDeepgramStream(
+    audioBody,
+    contentType,
+    contentLength,
+    language,
+    initialPrompt,
+    ctx.env,
+    ctx.logger
+  );
+}
+
+/**
+ * Large file path: Upload to R2, send URL to Deepgram.
+ */
+async function transcribeViaR2(
+  ctx: import('../pipeline').RequestContext,
+  audioBody: ReadableStream<Uint8Array>,
+  contentType: string,
+  language?: string,
+  initialPrompt?: string
+): Promise<StreamingTranscriptionResult> {
+
+  ctx.logger.log('info', 'Using R2 upload path for large file');
+
+  const r2Key = generateR2Key(contentType);
+
+  try {
+    // Upload to R2
+    await uploadToR2(ctx.env.AUDIO_BUCKET, r2Key, audioBody, contentType);
+    ctx.logger.log('info', 'Audio uploaded to R2', { r2Key });
+
+    // Generate presigned URL
+    const bucketName = ctx.env.ENVIRONMENT === 'production'
+      ? 'hyperwhisper-audio-temp-prod'
+      : 'hyperwhisper-audio-temp-dev';
+
+    const presignedUrl = await generateR2PresignedUrl(
+      ctx.env.R2_ACCOUNT_ID,
+      ctx.env.R2_ACCESS_KEY_ID,
+      ctx.env.R2_SECRET_ACCESS_KEY,
+      bucketName,
+      r2Key,
+      15 * 60 // 15 min expiry
+    );
+
+    // Transcribe via URL
+    const result = await transcribeWithDeepgramUrl(
+      presignedUrl,
+      language,
+      initialPrompt,
+      ctx.env,
+      ctx.logger
+    );
+
+    // Cleanup R2 (non-blocking)
+    ctx.ctx.waitUntil(
+      deleteFromR2(ctx.env.AUDIO_BUCKET, r2Key).catch(err => {
+        ctx.logger.log('warn', 'Failed to delete R2 file', { r2Key, error: String(err) });
+      })
+    );
+
+    return result;
+
+  } catch (error) {
+    // Cleanup on error
+    ctx.ctx.waitUntil(deleteFromR2(ctx.env.AUDIO_BUCKET, r2Key).catch(() => {}));
+    throw error;
+  }
+}
+
+/**
+ * Build the response object.
+ */
+function buildResponse(
+  ctx: import('../pipeline').RequestContext,
+  result: StreamingTranscriptionResult,
+  credits: number
+): Response {
+
+  const response: StreamingTranscriptionResponse = {
+    text: result.text,
+    language: result.language,
+    duration: result.durationSeconds,
+    cost: {
+      usd: result.costUsd,
+      credits,
+    },
+    metadata: {
+      request_id: ctx.requestId,
+      stt_provider: 'deepgram-nova3',
+    },
+    no_speech_detected: result.source === 'no_speech' ? true : undefined,
+  };
+
+  return new Response(JSON.stringify(response), {
+    status: 200,
+    headers: {
+      ...CORS_HEADERS,
+      'content-type': 'application/json',
+      'X-Request-ID': ctx.requestId,
+      'X-STT-Provider': 'deepgram-nova3',
+      'X-Total-Cost-Usd': formatUsd(result.costUsd),
+      'X-Credits-Used': credits.toFixed(1),
+    },
+  });
 }
