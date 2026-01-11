@@ -6,7 +6,7 @@
 import type { Env, GroqUsage } from '../types';
 import { Logger } from '../utils/logger';
 import { safeReadText, isRecord } from '../utils/utils';
-import { computeChatCost, isGroqUsage } from '../billing/cost-calculator';
+import { computeGroqChatCost, isGroqUsage } from '../billing/cost-calculator';
 
 const DEFAULT_GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
 const GROQ_CHAT_MODEL = 'llama-3.3-70b-versatile';
@@ -65,7 +65,7 @@ export async function requestGroqChat(
 
   const json = await response.json();
   const usage = isRecord(json) && isGroqUsage(json['usage']) ? json['usage'] : undefined;
-  const costUsd = usage ? computeChatCost(usage) : 0;
+  const costUsd = usage ? computeGroqChatCost(usage) : 0;
 
   return {
     raw: json,

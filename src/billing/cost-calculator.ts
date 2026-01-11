@@ -1,9 +1,10 @@
 // COST CALCULATION MODULE
-// Handles pricing calculations for STT providers and Groq Llama usage
+// Handles pricing calculations for STT providers and LLM post-processing
 //
 // PRICING SUMMARY:
 // - ElevenLabs Scribe v2 (STT): $0.00983/minute
 // - Deepgram Nova-3 (STT): $0.0055/minute ($0.0043 base + $0.0012 features)
+// - Cerebras Llama 3.3 70B (post-processing, default): $0.85/1M input, $1.20/1M output
 // - Groq Llama 3.3 70B (post-processing): $0.59/1M prompt tokens, $0.79/1M completion tokens
 
 import type { GroqUsage } from '../types';
@@ -18,9 +19,13 @@ const ELEVENLABS_COST_PER_AUDIO_MINUTE = 0.00983; // $0.00983/minute for Scribe 
 // Base: $0.0043/min + Features (smart_format, utterances, etc.): $0.0012/min
 const DEEPGRAM_COST_PER_AUDIO_MINUTE = 0.0055; // $0.0055/minute total
 
-// Groq Llama Pricing (USD) - used for post-processing
-const LLAMA_PROMPT_COST_PER_TOKEN = 0.59 / 1_000_000; // $0.59 per 1M prompt tokens
-const LLAMA_COMPLETION_COST_PER_TOKEN = 0.79 / 1_000_000; // $0.79 per 1M completion tokens
+// Cerebras Llama Pricing (USD) - default post-processing provider
+const CEREBRAS_PROMPT_COST_PER_TOKEN = 0.85 / 1_000_000; // $0.85 per 1M input tokens
+const CEREBRAS_COMPLETION_COST_PER_TOKEN = 1.20 / 1_000_000; // $1.20 per 1M output tokens
+
+// Groq Llama Pricing (USD) - alternative post-processing provider
+const GROQ_PROMPT_COST_PER_TOKEN = 0.59 / 1_000_000; // $0.59 per 1M prompt tokens
+const GROQ_COMPLETION_COST_PER_TOKEN = 0.79 / 1_000_000; // $0.79 per 1M completion tokens
 
 // CREDIT MODEL: 1 credit = $0.001 USD
 const USD_PER_CREDIT = 0.001;
@@ -59,11 +64,20 @@ export function computeDeepgramTranscriptionCost(durationSeconds: number): numbe
 }
 
 /**
+ * Convert Cerebras chat usage to USD using published per-token pricing
+ */
+export function computeCerebrasChatCost(usage: GroqUsage): number {
+  const promptCost = usage.prompt_tokens * CEREBRAS_PROMPT_COST_PER_TOKEN;
+  const completionCost = usage.completion_tokens * CEREBRAS_COMPLETION_COST_PER_TOKEN;
+  return roundUsd(promptCost + completionCost);
+}
+
+/**
  * Convert Groq chat usage to USD using published per-token pricing
  */
-export function computeChatCost(usage: GroqUsage): number {
-  const promptCost = usage.prompt_tokens * LLAMA_PROMPT_COST_PER_TOKEN;
-  const completionCost = usage.completion_tokens * LLAMA_COMPLETION_COST_PER_TOKEN;
+export function computeGroqChatCost(usage: GroqUsage): number {
+  const promptCost = usage.prompt_tokens * GROQ_PROMPT_COST_PER_TOKEN;
+  const completionCost = usage.completion_tokens * GROQ_COMPLETION_COST_PER_TOKEN;
   return roundUsd(promptCost + completionCost);
 }
 

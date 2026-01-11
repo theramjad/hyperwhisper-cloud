@@ -1,12 +1,22 @@
 // POST-PROCESS HANDLER
-// Handler for POST /post-process endpoint - standalone text correction via Groq Llama
+// Handler for POST /post-process endpoint - standalone text correction via LLM
+//
+// PROVIDERS:
+// - Cerebras Llama 3.3 70B (default): Fast inference, $0.85/1M input, $1.20/1M output
+// - Groq Llama 3.3 70B: Alternative, $0.59/1M input, $0.79/1M output
+//
+// PROVIDER SELECTION:
+// Client sends X-LLM-Provider header to choose provider:
+// - "cerebras" (default if omitted)
+// - "groq"
 //
 // FLOW:
 // 1. Pipeline: IP check → Auth → Credit validation
 // 2. Validate JSON body (text, prompt)
-// 3. Call Groq for correction
-// 4. Deduct credits (background)
-// 5. Return response
+// 3. Extract provider from X-LLM-Provider header
+// 4. Call selected LLM for correction
+// 5. Deduct credits (background)
+// 6. Return response with X-LLM-Provider header
 
 import type { Env, PostProcessRequest, PostProcessResponse } from '../types';
 import {
@@ -21,6 +31,7 @@ import {
 } from '../pipeline';
 import { roundToTenth, retryWithBackoff } from '../utils/utils';
 import { requestGroqChat, buildCorrectionRequest } from '../api/groq-client';
+import { requestCerebrasChat } from '../api/cerebras-client';
 import {
   extractCorrectedText,
   buildTranscriptUserContent,
@@ -31,6 +42,43 @@ import { calculateCreditsForCost } from '../billing/billing';
 // Estimated credits for post-processing (~$0.001/request)
 const ESTIMATED_POST_PROCESS_CREDITS = 1.0;
 const MAX_TEXT_LENGTH = 100000; // ~25,000 words
+
+// =============================================================================
+// LLM PROVIDER CONFIGURATION
+// =============================================================================
+
+type LLMProvider = 'cerebras' | 'groq';
+const DEFAULT_LLM_PROVIDER: LLMProvider = 'cerebras';
+
+const LLM_PROVIDER_NAMES: Record<LLMProvider, string> = {
+  cerebras: 'cerebras-llama-3.3-70b',
+  groq: 'groq-llama-3.3-70b-versatile',
+};
+
+/**
+ * Extract LLM provider from X-LLM-Provider header.
+ * Returns default provider if header is missing or invalid.
+ */
+function extractLLMProvider(request: Request, logger: import('../utils/logger').Logger): LLMProvider {
+  const header = request.headers.get('x-llm-provider')?.toLowerCase().trim();
+
+  if (header === 'groq') {
+    return 'groq';
+  }
+  if (header === 'cerebras') {
+    return 'cerebras';
+  }
+
+  // Default or invalid value
+  if (header && header !== 'cerebras' && header !== 'groq') {
+    logger.log('warn', 'Invalid X-LLM-Provider header, using default', {
+      provided: header,
+      default: DEFAULT_LLM_PROVIDER,
+    });
+  }
+
+  return DEFAULT_LLM_PROVIDER;
+}
 
 /**
  * Handle POST /post-process - standalone text correction
@@ -76,28 +124,37 @@ export async function handlePostProcess(
     const credits = await validateCredits(ctx, auth.value, ESTIMATED_POST_PROCESS_CREDITS);
     if (!credits.ok) return credits.response;
 
-    ctx.logger.log('info', 'Post-process starting - sending transcript to Groq for AI correction', {
+    // =========================================================================
+    // EXTRACT PROVIDER
+    // =========================================================================
+
+    const provider = extractLLMProvider(request, ctx.logger);
+
+    ctx.logger.log('info', 'Post-process starting - sending transcript for AI correction', {
       textLength: text.length,
       userType: auth.value.type,
-      model: 'llama-3.3-70b-versatile',
+      provider,
+      model: LLM_PROVIDER_NAMES[provider],
     });
 
     // =========================================================================
-    // CALL GROQ
+    // CALL LLM
     // =========================================================================
 
     const startTime = Date.now();
     const userContent = buildTranscriptUserContent(text);
     const payload = buildCorrectionRequest(prompt, userContent);
 
-    const groqResponse = await retryWithBackoff(
-      () => requestGroqChat(ctx.env, payload, ctx.logger, ctx.requestId),
+    const llmResponse = await retryWithBackoff(
+      () => provider === 'cerebras'
+        ? requestCerebrasChat(ctx.env, payload, ctx.logger, ctx.requestId)
+        : requestGroqChat(ctx.env, payload, ctx.logger, ctx.requestId),
       {
         maxRetries: 3,
         initialDelayMs: 1000,
         backoffMultiplier: 2,
         onRetry: (attempt, error, delayMs) => {
-          ctx.logger.log('warn', 'Groq API call failed - retrying with exponential backoff', {
+          ctx.logger.log('warn', `${provider} API call failed - retrying with exponential backoff`, {
             attempt,
             error: error.message,
             delayMs,
@@ -107,13 +164,14 @@ export async function handlePostProcess(
       }
     );
 
-    const correctedText = stripCleanMarkers(extractCorrectedText(groqResponse.raw));
+    const correctedText = stripCleanMarkers(extractCorrectedText(llmResponse.raw));
     const latencyMs = Date.now() - startTime;
-    const costUsd = groqResponse.costUsd;
+    const costUsd = llmResponse.costUsd;
 
-    ctx.logger.log('info', 'Post-processing complete - Groq correction successful', {
+    ctx.logger.log('info', 'Post-processing complete - correction successful', {
       latencyMs,
       costUsd,
+      provider,
       inputLength: text.length,
       outputLength: correctedText.length,
       compressionRatio: (correctedText.length / text.length * 100).toFixed(1) + '%',
@@ -131,6 +189,7 @@ export async function handlePostProcess(
         input_length: text.length,
         output_length: correctedText.length,
         endpoint: '/post-process',
+        llm_provider: provider,
       })
     );
 
@@ -152,6 +211,7 @@ export async function handlePostProcess(
         ...CORS_HEADERS,
         'content-type': 'application/json',
         'X-Request-ID': ctx.requestId,
+        'X-LLM-Provider': LLM_PROVIDER_NAMES[provider],
         'X-Total-Cost-Usd': costUsd.toFixed(6),
         'X-Credits-Used': actualCredits.toFixed(1),
       },

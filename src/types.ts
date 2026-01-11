@@ -13,7 +13,8 @@ export interface Env {
   DEEPGRAM_API_KEY: string;     // Deepgram API key for Nova-3 transcription (kept for rollback)
   ELEVENLABS_API_KEY: string;   // ElevenLabs API key for Scribe v2 transcription
   GROQ_API_KEY: string;         // Groq API key for Llama post-processing
-  GROQ_BASE_URL?: string;     // Optional custom Groq base URL
+  GROQ_BASE_URL?: string;       // Optional custom Groq base URL
+  CEREBRAS_API_KEY: string;     // Cerebras API key for Llama post-processing (default)
 
   // KV Namespaces
   RATE_LIMITER: KVNamespace;   // IP-based rate limiting (daily quota)
