@@ -3,7 +3,7 @@
 //
 // PROVIDERS:
 // - ElevenLabs Scribe v2 (default): Higher accuracy, $0.00983/min
-// - Deepgram Nova-3: Lower cost, $0.0043/min
+// - Deepgram Nova-3: Lower cost, $0.0055/min
 //
 // PROVIDER SELECTION:
 // Client sends X-STT-Provider header to choose provider:

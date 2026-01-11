@@ -7,7 +7,7 @@
 //
 // STT PROVIDERS (selected via X-STT-Provider header):
 // - ElevenLabs Scribe v2 (default): $0.00983/min - Higher accuracy
-// - Deepgram Nova-3: $0.0043/min - Lower cost
+// - Deepgram Nova-3: $0.0055/min - Lower cost
 //
 // POST-PROCESSING:
 // - Groq Llama 3.3 70B ($0.59/1M prompt, $0.79/1M completion)
