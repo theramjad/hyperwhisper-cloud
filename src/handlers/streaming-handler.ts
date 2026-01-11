@@ -2,13 +2,13 @@
 // Handler for POST /transcribe endpoint - Multi-provider STT transcription
 //
 // PROVIDERS:
-// - ElevenLabs Scribe v2 (default): Higher accuracy, $0.00983/min
-// - Deepgram Nova-3: Lower cost, $0.0055/min
+// - Deepgram Nova-3 (default): Fast and cost-effective, $0.0055/min
+// - ElevenLabs Scribe v2: Higher accuracy, $0.00983/min
 //
 // PROVIDER SELECTION:
 // Client sends X-STT-Provider header to choose provider:
-// - "elevenlabs" (default if omitted)
-// - "deepgram"
+// - "deepgram" (default if omitted)
+// - "elevenlabs"
 //
 // FLOW:
 // 1. Pipeline: IP check → Auth → Credit validation
@@ -60,7 +60,7 @@ import { roundToTenth } from '../utils/utils';
 
 // Supported STT providers
 type STTProvider = 'elevenlabs' | 'deepgram';
-const DEFAULT_PROVIDER: STTProvider = 'elevenlabs';
+const DEFAULT_PROVIDER: STTProvider = 'deepgram';
 
 // Provider display names for response headers
 const PROVIDER_NAMES: Record<STTProvider, string> = {
