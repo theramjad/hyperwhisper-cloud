@@ -1,12 +1,17 @@
 // COST CALCULATION MODULE
-// Handles pricing calculations for Deepgram Nova-3 and Groq Llama usage
+// Handles pricing calculations for STT providers and Groq Llama usage
 //
 // PRICING SUMMARY:
-// - Deepgram Nova-3 (STT): $0.0043/minute ($0.258/hour)
+// - ElevenLabs Scribe v2 (STT): $0.00983/minute
+// - Deepgram Nova-3 (STT): $0.0043/minute
 // - Groq Llama 3.3 70B (post-processing): $0.59/1M prompt tokens, $0.79/1M completion tokens
 
 import type { GroqUsage } from '../types';
 import { isRecord, roundUpToTenth } from '../utils/utils';
+
+// ElevenLabs Scribe v2 Pricing (USD)
+// Source: https://elevenlabs.io/pricing
+const ELEVENLABS_COST_PER_AUDIO_MINUTE = 0.00983; // $0.00983/minute for Scribe v2
 
 // Deepgram Nova-3 Pricing (USD)
 // Source: https://deepgram.com/pricing (batch/pre-recorded rate)
@@ -18,6 +23,21 @@ const LLAMA_COMPLETION_COST_PER_TOKEN = 0.79 / 1_000_000; // $0.79 per 1M comple
 
 // CREDIT MODEL: 1 credit = $0.001 USD
 const USD_PER_CREDIT = 0.001;
+
+/**
+ * ELEVENLABS TRANSCRIPTION COST
+ * Convert audio duration to USD using ElevenLabs Scribe v2 pricing
+ *
+ * Rate: $0.00983 per minute
+ *
+ * @param durationSeconds - Audio duration in seconds
+ * @returns Cost in USD (micro-dollar precision)
+ */
+export function computeElevenLabsTranscriptionCost(durationSeconds: number): number {
+  const durationMinutes = durationSeconds / 60;
+  const raw = durationMinutes * ELEVENLABS_COST_PER_AUDIO_MINUTE;
+  return roundUsd(raw);
+}
 
 /**
  * DEEPGRAM TRANSCRIPTION COST

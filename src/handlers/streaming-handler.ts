@@ -1,12 +1,22 @@
 // STREAMING TRANSCRIPTION HANDLER
-// Handler for POST /transcribe endpoint - zero-buffer streaming to Deepgram
+// Handler for POST /transcribe endpoint - Multi-provider STT transcription
+//
+// PROVIDERS:
+// - ElevenLabs Scribe v2 (default): Higher accuracy, $0.00983/min
+// - Deepgram Nova-3: Lower cost, $0.0043/min
+//
+// PROVIDER SELECTION:
+// Client sends X-STT-Provider header to choose provider:
+// - "elevenlabs" (default if omitted)
+// - "deepgram"
 //
 // FLOW:
 // 1. Pipeline: IP check → Auth → Credit validation
 // 2. Validate streaming-specific headers (Content-Type, Content-Length)
-// 3. Transcribe via Deepgram (streaming or R2 for large files)
-// 4. Deduct credits (background)
-// 5. Return response
+// 3. Extract provider from X-STT-Provider header
+// 4. Transcribe via selected provider (buffer or R2 for large files)
+// 5. Deduct credits (background)
+// 6. Return response with X-STT-Provider header
 
 import type { Env, StreamingTranscriptionResponse } from '../types';
 import {
@@ -25,9 +35,14 @@ import {
   invalidContentTypeResponse,
 } from '../pipeline';
 import {
+  transcribeWithElevenLabsFromStream,
+  transcribeWithElevenLabsFromUrl,
+  StreamingTranscriptionResult as ElevenLabsResult,
+} from '../api/elevenlabs-client';
+import {
   transcribeWithDeepgramStream,
   transcribeWithDeepgramUrl,
-  StreamingTranscriptionResult,
+  StreamingTranscriptionResult as DeepgramResult,
 } from '../api/deepgram-client';
 import {
   uploadToR2,
@@ -39,10 +54,33 @@ import { formatUsd } from '../billing/cost-calculator';
 import { calculateCreditsForCost } from '../billing/billing';
 import { roundToTenth } from '../utils/utils';
 
-// Large files (>30MB) use R2 upload path instead of direct streaming
-// Cloudflare Workers chunked encoding causes issues with Deepgram for large files
-const LARGE_FILE_THRESHOLD = 30 * 1024 * 1024; // 30MB
-const MAX_AUDIO_SIZE = 2 * 1024 * 1024 * 1024; // 2GB (Deepgram limit)
+// =============================================================================
+// PROVIDER CONFIGURATION
+// =============================================================================
+
+// Supported STT providers
+type STTProvider = 'elevenlabs' | 'deepgram';
+const DEFAULT_PROVIDER: STTProvider = 'elevenlabs';
+
+// Provider display names for response headers
+const PROVIDER_NAMES: Record<STTProvider, string> = {
+  elevenlabs: 'elevenlabs-scribe-v2',
+  deepgram: 'deepgram-nova3',
+};
+
+// R2 thresholds per provider (memory constraints differ)
+// ElevenLabs requires FormData (buffering), so needs more memory headroom
+// Deepgram accepts raw binary stream, so can handle larger files in-memory
+const R2_THRESHOLD: Record<STTProvider, number> = {
+  elevenlabs: 15 * 1024 * 1024,  // 15MB (FormData buffering overhead)
+  deepgram: 30 * 1024 * 1024,    // 30MB (raw binary, less overhead)
+};
+
+// Maximum audio size (applies to all providers)
+const MAX_AUDIO_SIZE = 2 * 1024 * 1024 * 1024; // 2GB
+
+// Unified result type (both providers use compatible interface)
+type TranscriptionResult = ElevenLabsResult | DeepgramResult;
 
 /**
  * Handle POST /transcribe - streaming transcription
@@ -77,15 +115,19 @@ export async function handleStreamingTranscription(
     const credits = await validateCredits(ctx, auth.value, estimatedCredits);
     if (!credits.ok) return credits.response;
 
+    // Extract provider from header (default: elevenlabs)
+    const provider = extractProvider(ctx);
+
     // Extract optional params
     const language = ctx.url.searchParams.get('language') || undefined;
     const mode = ctx.url.searchParams.get('mode') || undefined;
     const initialPrompt = ctx.url.searchParams.get('initial_prompt') || undefined;
 
-    ctx.logger.log('info', 'Streaming transcription pipeline starting - sending audio to Deepgram', {
+    ctx.logger.log('info', `Streaming transcription pipeline starting - sending audio to ${PROVIDER_NAMES[provider]}`, {
       contentLength,
       language: language || 'auto',
       userType: auth.value.type,
+      provider,
       estimatedMinutes: Math.round(contentLength / (1024 * 1024)),
     });
 
@@ -99,7 +141,7 @@ export async function handleStreamingTranscription(
     }
 
     const transcriptionResult = await transcribeAudio(
-      ctx, audioBody, contentType, contentLength, language, initialPrompt
+      ctx, audioBody, contentType, contentLength, provider, language, initialPrompt
     );
 
     // =========================================================================
@@ -108,11 +150,11 @@ export async function handleStreamingTranscription(
 
     // No speech detected - return early with zero cost
     if (transcriptionResult.source === 'no_speech') {
-      ctx.logger.log('info', 'Deepgram detected silence - no transcribable speech in audio', {
+      ctx.logger.log('info', `${PROVIDER_NAMES[provider]} detected silence - no transcribable speech in audio`, {
         duration: transcriptionResult.durationSeconds,
         action: 'Returning empty transcript with zero cost',
       });
-      return buildResponse(ctx, transcriptionResult, 0);
+      return buildResponse(ctx, transcriptionResult, 0, provider);
     }
 
     // Calculate actual credits and deduct in background
@@ -126,6 +168,7 @@ export async function handleStreamingTranscription(
         mode,
         endpoint: '/transcribe',
         streaming: true,
+        stt_provider: PROVIDER_NAMES[provider],
       })
     );
 
@@ -134,9 +177,10 @@ export async function handleStreamingTranscription(
       credits: actualCredits,
       textLength: transcriptionResult.text.length,
       costUsd: transcriptionResult.costUsd,
+      provider,
     });
 
-    return buildResponse(ctx, transcriptionResult, actualCredits);
+    return buildResponse(ctx, transcriptionResult, actualCredits, provider);
 
   } catch (error) {
     ctx.logger.log('error', 'Streaming transcription pipeline failed - internal server error', {
@@ -158,6 +202,31 @@ export async function handleStreamingTranscription(
 interface HeaderValidation {
   contentType: string;
   contentLength: number;
+}
+
+/**
+ * Extract STT provider from X-STT-Provider header.
+ * Returns default provider if header is missing or invalid.
+ */
+function extractProvider(ctx: import('../pipeline').RequestContext): STTProvider {
+  const header = ctx.request.headers.get('x-stt-provider')?.toLowerCase().trim();
+
+  if (header === 'deepgram') {
+    return 'deepgram';
+  }
+  if (header === 'elevenlabs') {
+    return 'elevenlabs';
+  }
+
+  // Default or invalid value
+  if (header && header !== 'elevenlabs' && header !== 'deepgram') {
+    ctx.logger.log('warn', 'Invalid X-STT-Provider header, using default', {
+      provided: header,
+      default: DEFAULT_PROVIDER,
+    });
+  }
+
+  return DEFAULT_PROVIDER;
 }
 
 /**
@@ -194,22 +263,41 @@ function validateStreamingHeaders(ctx: import('../pipeline').RequestContext):
 }
 
 /**
- * Transcribe audio using appropriate path (direct stream or R2 for large files).
+ * Transcribe audio using appropriate path (buffered or R2 for large files).
+ * Routes to the correct provider based on the provider parameter.
  */
 async function transcribeAudio(
   ctx: import('../pipeline').RequestContext,
   audioBody: ReadableStream<Uint8Array>,
   contentType: string,
   contentLength: number,
+  provider: STTProvider,
   language?: string,
   initialPrompt?: string
-): Promise<StreamingTranscriptionResult> {
+): Promise<TranscriptionResult> {
 
-  if (contentLength >= LARGE_FILE_THRESHOLD) {
-    return transcribeViaR2(ctx, audioBody, contentType, language, initialPrompt);
+  // Use provider-specific R2 threshold
+  const threshold = R2_THRESHOLD[provider];
+
+  if (contentLength >= threshold) {
+    return transcribeViaR2(ctx, audioBody, contentType, provider, language, initialPrompt);
   }
 
-  return transcribeWithDeepgramStream(
+  // Direct stream/buffer path
+  if (provider === 'deepgram') {
+    return transcribeWithDeepgramStream(
+      audioBody,
+      contentType,
+      contentLength,
+      language,
+      initialPrompt,
+      ctx.env,
+      ctx.logger
+    );
+  }
+
+  // Default: ElevenLabs
+  return transcribeWithElevenLabsFromStream(
     audioBody,
     contentType,
     contentLength,
@@ -221,17 +309,18 @@ async function transcribeAudio(
 }
 
 /**
- * Large file path: Upload to R2, send URL to Deepgram.
+ * Large file path: Upload to R2, send URL to provider.
  */
 async function transcribeViaR2(
   ctx: import('../pipeline').RequestContext,
   audioBody: ReadableStream<Uint8Array>,
   contentType: string,
+  provider: STTProvider,
   language?: string,
   initialPrompt?: string
-): Promise<StreamingTranscriptionResult> {
+): Promise<TranscriptionResult> {
 
-  ctx.logger.log('info', 'Using R2 upload path for large file');
+  ctx.logger.log('info', `Using R2 upload path for large file (provider: ${provider})`);
 
   const r2Key = generateR2Key(contentType);
 
@@ -254,14 +343,26 @@ async function transcribeViaR2(
       15 * 60 // 15 min expiry
     );
 
-    // Transcribe via URL
-    const result = await transcribeWithDeepgramUrl(
-      presignedUrl,
-      language,
-      initialPrompt,
-      ctx.env,
-      ctx.logger
-    );
+    // Transcribe via URL using selected provider
+    let result: TranscriptionResult;
+
+    if (provider === 'deepgram') {
+      result = await transcribeWithDeepgramUrl(
+        presignedUrl,
+        language,
+        initialPrompt,
+        ctx.env,
+        ctx.logger
+      );
+    } else {
+      result = await transcribeWithElevenLabsFromUrl(
+        presignedUrl,
+        language,
+        initialPrompt,
+        ctx.env,
+        ctx.logger
+      );
+    }
 
     // Cleanup R2 (non-blocking)
     ctx.ctx.waitUntil(
@@ -284,9 +385,12 @@ async function transcribeViaR2(
  */
 function buildResponse(
   ctx: import('../pipeline').RequestContext,
-  result: StreamingTranscriptionResult,
-  credits: number
+  result: TranscriptionResult,
+  credits: number,
+  provider: STTProvider
 ): Response {
+
+  const providerName = PROVIDER_NAMES[provider];
 
   const response: StreamingTranscriptionResponse = {
     text: result.text,
@@ -298,7 +402,7 @@ function buildResponse(
     },
     metadata: {
       request_id: ctx.requestId,
-      stt_provider: 'deepgram-nova3',
+      stt_provider: providerName,
     },
     no_speech_detected: result.source === 'no_speech' ? true : undefined,
   };
@@ -309,7 +413,7 @@ function buildResponse(
       ...CORS_HEADERS,
       'content-type': 'application/json',
       'X-Request-ID': ctx.requestId,
-      'X-STT-Provider': 'deepgram-nova3',
+      'X-STT-Provider': providerName,
       'X-Total-Cost-Usd': formatUsd(result.costUsd),
       'X-Credits-Used': credits.toFixed(1),
     },

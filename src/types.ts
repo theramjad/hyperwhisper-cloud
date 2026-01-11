@@ -10,8 +10,9 @@
 // Cloudflare Worker environment bindings
 export interface Env {
   // Transcription APIs
-  DEEPGRAM_API_KEY: string;   // Deepgram API key for Nova-3 transcription
-  GROQ_API_KEY: string;       // Groq API key for Llama post-processing
+  DEEPGRAM_API_KEY: string;     // Deepgram API key for Nova-3 transcription (kept for rollback)
+  ELEVENLABS_API_KEY: string;   // ElevenLabs API key for Scribe v2 transcription
+  GROQ_API_KEY: string;         // Groq API key for Llama post-processing
   GROQ_BASE_URL?: string;     // Optional custom Groq base URL
 
   // KV Namespaces
@@ -180,6 +181,27 @@ export interface DeepgramUtterance {
   transcript: string;        // Utterance text
   words: DeepgramWord[];     // Words in this utterance
   speaker?: number;          // Speaker ID (when diarize=true)
+}
+
+// ============================================================================
+// ELEVENLABS API TYPES
+// ============================================================================
+
+// Structure returned from ElevenLabs Scribe v2 /speech-to-text endpoint
+export interface ElevenLabsResponse {
+  text: string;                    // Full transcript text
+  language_code: string;           // ISO-639-3 language code (e.g., "eng", "jpn")
+  language_probability: number;    // 0-1 confidence score for detected language
+  words?: ElevenLabsWord[];        // Word-level details with timing (when timestamps_granularity='word')
+}
+
+export interface ElevenLabsWord {
+  text: string;                    // The word/token text
+  start: number;                   // Start time in seconds
+  end: number;                     // End time in seconds
+  type: 'word' | 'spacing' | 'audio_event';  // Token type
+  speaker_id?: string;             // Speaker identifier (when diarization enabled)
+  logprob?: number;                // Log probability (confidence metric)
 }
 
 // ============================================================================

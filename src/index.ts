@@ -1,18 +1,20 @@
 // HYPERWHISPER CLOUDFLARE WORKER
-// Edge-based transcription service using Deepgram Nova-3 for STT and Groq Llama for post-processing
+// Edge-based transcription service with multi-provider STT and Groq Llama for post-processing
 // Now with Polar-based billing for licensed users and IP rate limiting for anonymous users
 //
 // ARCHITECTURE:
-// Audio → Deepgram Nova-3 (STT) → Groq Llama 3.3 70B (post-processing) → Response
+// Audio → STT Provider (selectable) → Groq Llama 3.3 70B (post-processing) → Response
 //
-// PROVIDERS:
-// - STT: Deepgram Nova-3 ($0.0043/min, 100 concurrent requests, 2GB max file)
-// - Post-processing: Groq Llama 3.3 70B ($0.59/1M prompt, $0.79/1M completion)
+// STT PROVIDERS (selected via X-STT-Provider header):
+// - ElevenLabs Scribe v2 (default): $0.00983/min - Higher accuracy
+// - Deepgram Nova-3: $0.0043/min - Lower cost
+//
+// POST-PROCESSING:
+// - Groq Llama 3.3 70B ($0.59/1M prompt, $0.79/1M completion)
 //
 // ENDPOINTS:
-// - POST /transcribe - Streaming audio transcription (recommended for new clients)
+// - POST /transcribe - Audio transcription
 // - POST /post-process - Standalone text correction
-// - POST / - Legacy multipart transcription (backwards compatible)
 // - GET /usage - Query usage/balance
 
 import type { Env } from './types';
@@ -30,7 +32,7 @@ import {
 // Handlers
 import { handleStreamingTranscription } from './handlers/streaming-handler';
 import { handlePostProcess } from './handlers/post-process-handler';
-import { handleLegacyTranscription } from './handlers/legacy-handler';
+// Legacy handler removed - no longer used by any client version
 
 // Cloudflare Worker entry point
 export default {
@@ -64,13 +66,12 @@ export default {
     }
 
     // ========================================================================
-    // NEW STREAMING ENDPOINTS
-    // These endpoints use zero-buffer streaming to handle large audio files
-    // without hitting Cloudflare Worker memory limits (128MB)
+    // TRANSCRIPTION ENDPOINTS
     // ========================================================================
 
-    // ROUTE: POST /transcribe - Streaming audio transcription
-    // Pipes raw binary audio directly to Deepgram without buffering
+    // ROUTE: POST /transcribe - Audio transcription via ElevenLabs Scribe v2
+    // Buffers audio and sends to ElevenLabs via FormData
+    // For large files (>15MB), uploads to R2 and sends URL to ElevenLabs
     // Query params: license_key OR device_id, language, mode, initial_prompt
     // Headers: Content-Type: audio/*, Content-Length: required
     if (request.method === 'POST' && url.pathname === '/transcribe') {
@@ -82,17 +83,6 @@ export default {
     // Body: { text: string, prompt: string, license_key OR device_id }
     if (request.method === 'POST' && url.pathname === '/post-process') {
       return handlePostProcess(request, env, ctx, logger, clientIP);
-    }
-
-    // ========================================================================
-    // LEGACY ENDPOINT (backwards compatible for versions earlier than v2.12.0 inclusive)
-    // ========================================================================
-
-    // ROUTE: POST / - Legacy multipart transcription (buffered)
-    // Kept for backwards compatibility with older client versions
-    // See handlers/legacy-handler.ts for implementation details
-    if (request.method === 'POST' && url.pathname === '/') {
-      return handleLegacyTranscription(request, env, ctx, logger, clientIP);
     }
 
     // Fallback: Method not allowed for unmatched routes
