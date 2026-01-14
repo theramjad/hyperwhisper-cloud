@@ -65,6 +65,18 @@ export async function validateAuth(
 
   // LICENSED USER: Validate with Next.js API
   if (licenseKey) {
+    // Dev bypass: skip validation if DEV_BYPASS_KEY is set and matches
+    if (ctx.env.DEV_BYPASS_KEY && licenseKey === ctx.env.DEV_BYPASS_KEY) {
+      ctx.logger.log('info', 'Dev bypass key matched - skipping license validation');
+      const user: AuthenticatedUser = {
+        type: 'licensed',
+        licenseKey,
+        credits: 999999,
+      };
+      ctx.auth = user;
+      return ok(user);
+    }
+
     ctx.logger.log('info', 'Identifier resolved as license key - validating via Next.js API', {
       identifier: licenseKey,
     });
