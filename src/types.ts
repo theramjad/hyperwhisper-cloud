@@ -39,10 +39,6 @@ export interface Env {
 
   // Environment indicator (set in wrangler.toml)
   ENVIRONMENT?: string; // "development" or "production"
-
-  // Dev-only: bypass license validation when license_key matches this value
-  // Set via: wrangler secret put DEV_BYPASS_KEY --env development
-  DEV_BYPASS_KEY?: string;
 }
 
 // ============================================================================
