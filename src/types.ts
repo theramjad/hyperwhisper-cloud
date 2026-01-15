@@ -21,11 +21,6 @@ export interface Env {
   DEVICE_CREDITS: KVNamespace; // Device trial credits (150 credits per device_id)
   LICENSE_CACHE: KVNamespace;  // License validation cache (5 min TTL for credits)
 
-  // License/Credits API (Next.js backend)
-  // CF Workers call these endpoints for license validation and credit management
-  // The license key itself acts as authentication - no separate API key needed
-  HYPERWHISPER_API_URL: string; // Base URL (e.g., "https://hyperwhisper.com")
-
   // R2 Storage
   // Bucket for temporary audio storage (large file transcription >30MB)
   // Files are uploaded to R2, Deepgram fetches via presigned URL, then deleted

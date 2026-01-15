@@ -12,6 +12,7 @@ import {
 } from './response';
 import { validateAndGetCredits } from '../billing/billing';
 import { getDeviceBalance } from '../billing/device-credits';
+import { API_BASE_URL } from '../constants/credits';
 
 /**
  * Input for authentication: either from query params or form data.
@@ -72,7 +73,7 @@ export async function validateAuth(
     const validation = await validateAndGetCredits(
       ctx.env.LICENSE_CACHE,
       licenseKey,
-      ctx.env.HYPERWHISPER_API_URL,
+      API_BASE_URL,
       ctx.logger
     );
 

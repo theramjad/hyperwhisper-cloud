@@ -14,6 +14,7 @@ import {
   getDeviceBalance,
   formatDeviceBalance
 } from '../billing/device-credits';
+import { API_BASE_URL } from '../constants/credits';
 
 /**
  * CORS headers for all responses
@@ -87,7 +88,7 @@ export async function handleUsageQuery(
           const balanceResult = await getCreditsBalance(
             env.LICENSE_CACHE,
             licenseKey,
-            env.HYPERWHISPER_API_URL,
+            API_BASE_URL,
             logger
           );
 
@@ -99,7 +100,7 @@ export async function handleUsageQuery(
             const validation = await validateAndGetCredits(
               env.LICENSE_CACHE,
               licenseKey,
-              env.HYPERWHISPER_API_URL,
+              API_BASE_URL,
               logger,
               true // forceRefresh
             );
@@ -114,7 +115,7 @@ export async function handleUsageQuery(
           const validation = await validateAndGetCredits(
             env.LICENSE_CACHE,
             licenseKey,
-            env.HYPERWHISPER_API_URL,
+            API_BASE_URL,
             logger,
             true // forceRefresh
           );
@@ -126,7 +127,7 @@ export async function handleUsageQuery(
         const validation = await validateAndGetCredits(
           env.LICENSE_CACHE,
           licenseKey,
-          env.HYPERWHISPER_API_URL,
+          API_BASE_URL,
           logger,
           false
         );

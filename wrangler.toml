@@ -13,7 +13,6 @@ name = "hyperwhisper-v1-dev"
 [env.development.vars]
 ENVIRONMENT = "development"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-# HYPERWHISPER_API_URL set in secrets (e.g., "https://hyperwhisper.com" or localhost for dev)
 
 # Development KV namespaces (v1)
 [[env.development.kv_namespaces]]
@@ -49,7 +48,6 @@ name = "hyperwhisper-v1-prod"
 [env.production.vars]
 ENVIRONMENT = "production"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-# HYPERWHISPER_API_URL set in secrets (https://hyperwhisper.com)
 
 # Production KV namespaces (v1)
 [[env.production.kv_namespaces]]
