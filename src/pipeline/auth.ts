@@ -12,7 +12,7 @@ import {
 } from './response';
 import { validateAndGetCredits } from '../billing/billing';
 import { getDeviceBalance } from '../billing/device-credits';
-import { API_BASE_URL } from '../constants/credits';
+import { API_BASE_URL } from '../constants';
 
 /**
  * Input for authentication: either from query params or form data.

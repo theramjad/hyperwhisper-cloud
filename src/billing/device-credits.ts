@@ -12,7 +12,7 @@
 // - Deductions happen against both pools
 
 import { Logger } from '../utils/logger';
-import { CREDITS_PER_MINUTE, TRIAL_CREDIT_ALLOCATION } from '../constants/credits';
+import { CREDITS_PER_MINUTE, TRIAL_CREDIT_ALLOCATION } from '../constants';
 import { roundToTenth } from '../utils/utils';
 
 // Configuration

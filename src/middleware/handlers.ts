@@ -14,7 +14,7 @@ import {
   getDeviceBalance,
   formatDeviceBalance
 } from '../billing/device-credits';
-import { API_BASE_URL } from '../constants/credits';
+import { API_BASE_URL } from '../constants';
 
 /**
  * CORS headers for all responses

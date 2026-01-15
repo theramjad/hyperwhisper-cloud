@@ -11,7 +11,7 @@ import {
   deviceCreditsExhaustedResponse,
   ipRateLimitResponse,
 } from './response';
-import { CREDITS_PER_MINUTE, TRIAL_CREDIT_ALLOCATION, API_BASE_URL } from '../constants/credits';
+import { CREDITS_PER_MINUTE, TRIAL_CREDIT_ALLOCATION, API_BASE_URL } from '../constants';
 import { roundToTenth, roundUpToTenth } from '../utils/utils';
 import { recordUsage, hasSufficientBalance } from '../billing/billing';
 import { deductDeviceCredits, getDeviceBalance } from '../billing/device-credits';

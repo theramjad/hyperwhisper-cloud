@@ -2,7 +2,7 @@
 // Standardized JSON responses for the pipeline.
 // Centralizes CORS headers and error formatting.
 
-import { CREDITS_PER_MINUTE } from '../constants/credits';
+import { CREDITS_PER_MINUTE } from '../constants';
 
 /**
  * CORS headers included in all responses.

@@ -18,7 +18,7 @@
 
 import { Logger } from '../utils/logger';
 import { getLicenseFromCache, setLicenseInCache, CachedLicense } from './license-cache';
-import { CREDITS_PER_MINUTE } from '../constants/credits';
+import { CREDITS_PER_MINUTE } from '../constants';
 import { roundToTenth, roundUpToTenth } from '../utils/utils';
 
 /**
