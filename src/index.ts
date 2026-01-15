@@ -31,6 +31,7 @@ import {
 
 // Handlers
 import { handleStreamingTranscription } from './handlers/streaming-handler';
+import { handleStreamingWebSocket } from './handlers/streaming-ws-handler';
 import { handlePostProcess } from './handlers/post-process-handler';
 // Legacy handler removed - no longer used by any client version
 
@@ -58,6 +59,12 @@ export default {
     // Handle CORS preflight
     if (request.method === 'OPTIONS') {
       return handleCORS();
+    }
+
+    // ROUTE: WebSocket /ws/transcribe - Real-time streaming transcription
+    // Bidirectional proxy to Deepgram Live API for live transcription
+    if (request.headers.get('Upgrade') === 'websocket' && url.pathname === '/ws/transcribe') {
+      return handleStreamingWebSocket(request, env, ctx);
     }
 
     // ROUTE: GET /usage - Query usage/balance
