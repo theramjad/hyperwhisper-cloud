@@ -4,10 +4,11 @@
 // PRICING SUMMARY:
 // - ElevenLabs Scribe v2 (STT): $0.00983/minute
 // - Deepgram Nova-3 (STT): $0.0055/minute ($0.0043 base + $0.0012 features)
+// - Groq Whisper large-v3 (STT): $0.111/hour (~$0.00185/minute)
 // - Cerebras Llama 3.3 70B (post-processing, default): $0.85/1M input, $1.20/1M output
 // - Groq Llama 3.3 70B (post-processing): $0.59/1M prompt tokens, $0.79/1M completion tokens
 
-import type { GroqUsage } from '../types';
+import type { GroqUsage, WhisperSegment } from '../types';
 import { isRecord, roundUpToTenth } from '../utils/utils';
 
 // ElevenLabs Scribe v2 Pricing (USD)
@@ -18,6 +19,12 @@ const ELEVENLABS_COST_PER_AUDIO_MINUTE = 0.00983; // $0.00983/minute for Scribe 
 // Source: https://deepgram.com/pricing (batch/pre-recorded rate)
 // Base: $0.0043/min + Features (smart_format, utterances, etc.): $0.0012/min
 const DEEPGRAM_COST_PER_AUDIO_MINUTE = 0.0055; // $0.0055/minute total
+
+// Groq Whisper Pricing (USD)
+// Source: https://groq.com/pricing
+// Model: whisper-large-v3
+const GROQ_WHISPER_COST_PER_AUDIO_HOUR = 0.111; // $0.111/hour (~$0.00185/minute)
+const GROQ_WHISPER_MIN_BILLABLE_SECONDS = 10; // Minimum billable duration
 
 // Cerebras Llama Pricing (USD) - default post-processing provider
 const CEREBRAS_PROMPT_COST_PER_TOKEN = 0.85 / 1_000_000; // $0.85 per 1M input tokens
@@ -61,6 +68,55 @@ export function computeDeepgramTranscriptionCost(durationSeconds: number): numbe
   const durationMinutes = durationSeconds / 60;
   const raw = durationMinutes * DEEPGRAM_COST_PER_AUDIO_MINUTE;
   return roundUsd(raw);
+}
+
+/**
+ * GROQ WHISPER TRANSCRIPTION COST
+ * Convert audio duration to USD using Groq Whisper pricing
+ *
+ * Groq publishes cost per audio hour for whisper-large-v3
+ * Rate: $0.111 per hour (~$0.00185/minute)
+ * Minimum billable: 10 seconds
+ *
+ * @param durationSeconds - Audio duration in seconds
+ * @returns Cost in USD (micro-dollar precision)
+ */
+export function computeGroqTranscriptionCost(durationSeconds: number): number {
+  const billableSeconds = Math.max(durationSeconds, GROQ_WHISPER_MIN_BILLABLE_SECONDS);
+  const raw = (billableSeconds / 3600) * GROQ_WHISPER_COST_PER_AUDIO_HOUR;
+  return roundUsd(raw);
+}
+
+/**
+ * DERIVE AUDIO DURATION
+ * Extract audio duration from Whisper response segments or direct duration field
+ *
+ * @param segments - Whisper segments with timing information
+ * @param directDuration - Direct duration from API response (preferred if available)
+ * @returns Duration in seconds, or undefined if not determinable
+ */
+export function deriveDurationSeconds(
+  segments: WhisperSegment[] | undefined,
+  directDuration?: number
+): number | undefined {
+  // Prefer direct duration if valid
+  if (typeof directDuration === 'number' && Number.isFinite(directDuration) && directDuration > 0) {
+    return directDuration;
+  }
+
+  // Fall back to calculating from segments
+  if (!Array.isArray(segments) || segments.length === 0) {
+    return undefined;
+  }
+
+  let maxEnd = 0;
+  for (const segment of segments) {
+    if (segment && typeof segment.end === 'number' && segment.end > maxEnd) {
+      maxEnd = segment.end;
+    }
+  }
+
+  return maxEnd > 0 ? maxEnd : undefined;
 }
 
 /**

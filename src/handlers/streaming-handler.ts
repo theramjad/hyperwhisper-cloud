@@ -4,11 +4,13 @@
 // PROVIDERS:
 // - Deepgram Nova-3 (default): Fast and cost-effective, $0.0055/min
 // - ElevenLabs Scribe v2: Higher accuracy, $0.00983/min
+// - Groq Whisper large-v3: Cheapest option, $0.00185/min
 //
 // PROVIDER SELECTION:
 // Client sends X-STT-Provider header to choose provider:
 // - "deepgram" (default if omitted)
 // - "elevenlabs"
+// - "groq"
 //
 // FLOW:
 // 1. Pipeline: IP check → Auth → Credit validation
@@ -45,6 +47,11 @@ import {
   StreamingTranscriptionResult as DeepgramResult,
 } from '../api/deepgram-client';
 import {
+  transcribeWithGroqFromStream,
+  transcribeWithGroqFromUrl,
+  StreamingTranscriptionResult as GroqResult,
+} from '../api/groq-client';
+import {
   uploadToR2,
   generateR2PresignedUrl,
   deleteFromR2,
@@ -59,28 +66,30 @@ import { roundToTenth } from '../utils/utils';
 // =============================================================================
 
 // Supported STT providers
-type STTProvider = 'elevenlabs' | 'deepgram';
+type STTProvider = 'elevenlabs' | 'deepgram' | 'groq';
 const DEFAULT_PROVIDER: STTProvider = 'deepgram';
 
 // Provider display names for response headers
 const PROVIDER_NAMES: Record<STTProvider, string> = {
   elevenlabs: 'elevenlabs-scribe-v2',
   deepgram: 'deepgram-nova3',
+  groq: 'groq-whisper-large-v3',
 };
 
 // R2 thresholds per provider (memory constraints differ)
-// ElevenLabs requires FormData (buffering), so needs more memory headroom
+// ElevenLabs and Groq require FormData (buffering), so need more memory headroom
 // Deepgram accepts raw binary stream, so can handle larger files in-memory
 const R2_THRESHOLD: Record<STTProvider, number> = {
   elevenlabs: 15 * 1024 * 1024,  // 15MB (FormData buffering overhead)
   deepgram: 30 * 1024 * 1024,    // 30MB (raw binary, less overhead)
+  groq: 15 * 1024 * 1024,        // 15MB (FormData buffering like ElevenLabs)
 };
 
 // Maximum audio size (applies to all providers)
 const MAX_AUDIO_SIZE = 2 * 1024 * 1024 * 1024; // 2GB
 
-// Unified result type (both providers use compatible interface)
-type TranscriptionResult = ElevenLabsResult | DeepgramResult;
+// Unified result type (all providers use compatible interface)
+type TranscriptionResult = ElevenLabsResult | DeepgramResult | GroqResult;
 
 /**
  * Handle POST /transcribe - streaming transcription
@@ -217,9 +226,12 @@ function extractProvider(ctx: import('../pipeline').RequestContext): STTProvider
   if (header === 'elevenlabs') {
     return 'elevenlabs';
   }
+  if (header === 'groq') {
+    return 'groq';
+  }
 
   // Default or invalid value
-  if (header && header !== 'elevenlabs' && header !== 'deepgram') {
+  if (header && header !== 'elevenlabs' && header !== 'deepgram' && header !== 'groq') {
     ctx.logger.log('warn', 'Invalid X-STT-Provider header, using default', {
       provided: header,
       default: DEFAULT_PROVIDER,
@@ -283,9 +295,21 @@ async function transcribeAudio(
     return transcribeViaR2(ctx, audioBody, contentType, provider, language, initialPrompt);
   }
 
-  // Direct stream/buffer path
+  // Direct stream/buffer path - route to provider
   if (provider === 'deepgram') {
     return transcribeWithDeepgramStream(
+      audioBody,
+      contentType,
+      contentLength,
+      language,
+      initialPrompt,
+      ctx.env,
+      ctx.logger
+    );
+  }
+
+  if (provider === 'groq') {
+    return transcribeWithGroqFromStream(
       audioBody,
       contentType,
       contentLength,
@@ -348,6 +372,14 @@ async function transcribeViaR2(
 
     if (provider === 'deepgram') {
       result = await transcribeWithDeepgramUrl(
+        presignedUrl,
+        language,
+        initialPrompt,
+        ctx.env,
+        ctx.logger
+      );
+    } else if (provider === 'groq') {
+      result = await transcribeWithGroqFromUrl(
         presignedUrl,
         language,
         initialPrompt,

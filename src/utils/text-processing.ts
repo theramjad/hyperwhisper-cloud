@@ -1,7 +1,119 @@
 // TEXT PROCESSING MODULE
-// Functions for extracting and processing text from Groq chat API responses
+// Functions for extracting and processing text from:
+// - Groq Whisper transcription responses
+// - Groq chat API responses (post-processing)
 
 import { isRecord } from './utils';
+
+// =============================================================================
+// TRANSCRIPTION TEXT EXTRACTION (Whisper responses)
+// =============================================================================
+
+/**
+ * Robustly extract the transcription text from Groq's Whisper response structure.
+ * Handles various response formats and nested structures.
+ *
+ * @param response - The raw response from Whisper API
+ * @returns Object with text and source field, or undefined if no text found
+ */
+export function extractTranscriptionText(response: unknown): { text: string; source: string } | undefined {
+  if (typeof response === 'string') {
+    const trimmed = response.trim();
+    return trimmed.length > 0 ? { text: trimmed, source: 'string' } : undefined;
+  }
+
+  if (!isRecord(response)) {
+    return undefined;
+  }
+
+  // Direct text field (most common)
+  const directText = response['text'];
+  if (typeof directText === 'string' && directText.trim().length > 0) {
+    return { text: directText.trim(), source: 'text' };
+  }
+
+  // Alternative field names
+  const resultText = response['result'];
+  if (typeof resultText === 'string' && resultText.trim().length > 0) {
+    return { text: resultText.trim(), source: 'result' };
+  }
+
+  const outputText = response['output_text'];
+  if (typeof outputText === 'string' && outputText.trim().length > 0) {
+    return { text: outputText.trim(), source: 'output_text' };
+  }
+
+  // Nested transcription field
+  const transcriptionField = response['transcription'];
+  const nestedTranscription = extractTranscriptionText(transcriptionField);
+  if (nestedTranscription) {
+    return { text: nestedTranscription.text, source: `transcription.${nestedTranscription.source}` };
+  }
+
+  // Array fields
+  const dataField = response['data'];
+  if (Array.isArray(dataField)) {
+    for (const item of dataField) {
+      const fromItem = extractTranscriptionText(item);
+      if (fromItem) {
+        return { text: fromItem.text, source: `data.${fromItem.source}` };
+      }
+    }
+  }
+
+  const resultsField = response['results'];
+  if (Array.isArray(resultsField)) {
+    for (const item of resultsField) {
+      const fromItem = extractTranscriptionText(item);
+      if (fromItem) {
+        return { text: fromItem.text, source: `results.${fromItem.source}` };
+      }
+    }
+  }
+
+  // Extract from segments (fallback)
+  const segments = response['segments'];
+  if (Array.isArray(segments)) {
+    const parts: string[] = [];
+    for (const segment of segments) {
+      if (typeof segment === 'string') {
+        const trimmed = segment.trim();
+        if (trimmed.length > 0) {
+          parts.push(trimmed);
+        }
+        continue;
+      }
+
+      if (isRecord(segment) && typeof segment['text'] === 'string') {
+        const trimmed = segment['text'].trim();
+        if (trimmed.length > 0) {
+          parts.push(trimmed);
+        }
+      }
+    }
+
+    if (parts.length > 0) {
+      return { text: parts.join(' ').trim(), source: 'segments' };
+    }
+  }
+
+  // Output array field
+  const outputField = response['output'];
+  if (Array.isArray(outputField)) {
+    for (const item of outputField) {
+      const fromItem = extractTranscriptionText(item);
+      if (fromItem) {
+        return { text: fromItem.text, source: `output.${fromItem.source}` };
+      }
+    }
+  }
+
+  return undefined;
+}
+
+// =============================================================================
+// CORRECTION TEXT EXTRACTION (Chat/LLM responses)
+// =============================================================================
 
 /**
  * Extract the corrected text from Groq chat responses (handles streaming/non-streaming shapes)

@@ -229,3 +229,13 @@ export interface WhisperSegment {
   no_speech_prob?: number;
   tokens?: number[];
 }
+
+// Groq Whisper API response structure
+// Model: whisper-large-v3
+export interface WhisperResponse {
+  text?: string;
+  language?: string;
+  duration?: number;
+  segments?: WhisperSegment[];
+  task?: string;
+}
