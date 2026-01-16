@@ -24,12 +24,24 @@ This repository contains the **complete source code** running on our edge server
 - **Credits**: Stored until exhausted or license purchased
 
 ### Third-Party Processing
-HyperWhisper Cloud uses Deepgram for transcription and Groq for post-processing:
-- **Audio sent to**: Deepgram Nova-3 (speech-to-text)
-- **Text sent to**: Groq Llama (typo correction)
-- **Deepgram's privacy**: See [Deepgram Privacy Policy](https://deepgram.com/privacy)
-- **Groq's privacy**: See [Groq Privacy Policy](https://groq.com/privacy-policy/)
-- **For maximum privacy**: Use local Whisper models in the app (no cloud processing)
+HyperWhisper Cloud routes to different providers based on your settings:
+
+**Speech-to-Text Providers** (configurable via `X-STT-Provider` header):
+- **Deepgram Nova-3** (default) - $0.0055/min
+- **ElevenLabs Scribe v2** - $0.00983/min (higher accuracy)
+- **Groq Whisper large-v3** - $0.00185/min (fastest)
+
+**Post-Processing Providers** (configurable via `X-LLM-Provider` header):
+- **Cerebras Llama 3.3 70B** (default) - $0.85/$1.20 per 1M tokens (input/output)
+- **Groq Llama 3.3 70B** - $0.59/$0.79 per 1M tokens (input/output)
+
+**Privacy Policies**:
+- [Deepgram Privacy Policy](https://deepgram.com/privacy)
+- [ElevenLabs Privacy Policy](https://elevenlabs.io/privacy)
+- [Groq Privacy Policy](https://groq.com/privacy-policy/)
+- [Cerebras Privacy Policy](https://cerebras.ai/privacy)
+
+**For maximum privacy**: Use local Whisper models in the app (no cloud processing)
 
 ## Architecture
 
@@ -37,27 +49,32 @@ Built on Cloudflare Workers for global edge computing with zero cold starts.
 
 ### Stack
 - **Runtime**: Cloudflare Workers (V8 isolates)
-- **Transcription**: Deepgram Nova-3 ($0.0043/min)
-- **Post-processing**: Groq Llama 3.3 70B (typo correction)
+- **Transcription**: Deepgram Nova-3 (default), ElevenLabs Scribe v2, or Groq Whisper large-v3
+- **Post-processing**: Cerebras Llama 3.3 70B (default) or Groq Llama 3.3 70B (typo correction)
 - **Storage**: Cloudflare KV (credits only), R2 (temporary large file storage)
 - **Language**: TypeScript
 
 ### Request Flow
 ```
-Small files (<30MB):
+Small files (under provider-specific threshold):
 1. Client streams audio directly
 2. Worker validates credits (device or license)
-3. Audio streamed to Deepgram for transcription
-4. Text sent to Groq for post-processing (optional)
+3. Worker routes to STT provider based on X-STT-Provider header:
+   - Deepgram Nova-3 (default, <30MB threshold)
+   - ElevenLabs Scribe v2 (<15MB threshold)
+   - Groq Whisper large-v3 (<15MB threshold)
+4. Text sent to post-processing provider based on X-LLM-Provider header:
+   - Cerebras Llama 3.3 70B (default)
+   - Groq Llama 3.3 70B
 5. Credits deducted, response sent to client
 
-Large files (>=30MB):
+Large files (over provider-specific threshold):
 1. Client streams audio
 2. Worker validates credits
 3. Audio uploaded to R2 (temporary storage)
-4. Deepgram fetches from R2 via presigned URL
+4. STT provider fetches from R2 via presigned URL (15-min expiry)
 5. R2 file deleted immediately after transcription
-6. Text sent to Groq for post-processing (optional)
+6. Text sent to post-processing provider (optional)
 7. Credits deducted, response sent to client
 ```
 
@@ -231,7 +248,7 @@ Users can verify the deployed code matches this repository:
 ## Privacy Policy
 
 - **No data collection**: We don't collect, store, or analyze user data
-- **No third-party sharing**: Audio is processed by Groq only for transcription (see Third-Party Processing above)
+- **No third-party sharing**: Audio is processed by your chosen STT provider (Deepgram, ElevenLabs, or Groq) and text by your chosen post-processing provider (Cerebras or Groq) - see Third-Party Processing above
 - **No advertisements**: No tracking pixels, analytics, or ads
 - **Automatic log filtering**: Logs exclude audio, transcripts, and text (see `src/logger.ts:31-35`)
 - **Minimal logging**: Standard Cloudflare edge logs only (24-48 hour retention)
