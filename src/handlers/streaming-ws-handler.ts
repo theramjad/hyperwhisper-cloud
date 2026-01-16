@@ -85,6 +85,43 @@ interface DeepgramLiveResponse {
 }
 
 // =============================================================================
+// UTILITIES
+// =============================================================================
+
+/**
+ * Extract useful information from WebSocket error events.
+ * WebSocket Event objects don't have a meaningful toString(), so we need to
+ * extract available properties for logging.
+ */
+function extractWebSocketErrorInfo(event: Event): Record<string, unknown> {
+  const info: Record<string, unknown> = {
+    type: event.type,
+  };
+
+  // ErrorEvent has message property
+  if ('message' in event) {
+    info.message = (event as ErrorEvent).message;
+  }
+  if ('error' in event) {
+    const err = (event as { error?: unknown }).error;
+    if (err instanceof Error) {
+      info.errorMessage = err.message;
+      info.errorName = err.name;
+    } else if (err) {
+      info.error = String(err);
+    }
+  }
+  if ('code' in event) {
+    info.code = (event as { code?: unknown }).code;
+  }
+  if ('reason' in event) {
+    info.reason = (event as { reason?: unknown }).reason;
+  }
+
+  return info;
+}
+
+// =============================================================================
 // WEBSOCKET HANDLER
 // =============================================================================
 
@@ -201,9 +238,20 @@ export async function handleStreamingWebSocket(
     }
   }
 
-  // Use query parameter authentication for Deepgram WebSocket
-  // Cloudflare Workers' WebSocket doesn't properly support subprotocol authentication
-  const dgUrl = `wss://api.deepgram.com/v1/listen?${dgParams.toString()}&token=${env.DEEPGRAM_API_KEY}`;
+  // Use Sec-WebSocket-Protocol header for Deepgram WebSocket authentication
+  // Format: ['token', API_KEY] sets header: Sec-WebSocket-Protocol: token, API_KEY
+  const dgUrl = `wss://api.deepgram.com/v1/listen?${dgParams.toString()}`;
+
+  // Log connection parameters for debugging (without exposing API key)
+  logger.log('debug', 'Deepgram connection parameters', {
+    model: dgParams.get('model'),
+    language: dgParams.get('language') || 'auto-detect',
+    hasKeyterm: dgParams.has('keyterm'),
+    encoding: dgParams.get('encoding'),
+    sampleRate: dgParams.get('sample_rate'),
+    hasApiKey: !!env.DEEPGRAM_API_KEY,
+    apiKeyLength: env.DEEPGRAM_API_KEY?.length ?? 0,
+  });
 
   // =========================================================================
   // SESSION STATE
@@ -218,8 +266,8 @@ export async function handleStreamingWebSocket(
   // =========================================================================
 
   try {
-    // Connect to Deepgram using query parameter authentication
-    deepgramWs = new WebSocket(dgUrl);
+    // Connect to Deepgram using Sec-WebSocket-Protocol header authentication
+    deepgramWs = new WebSocket(dgUrl, ['token', env.DEEPGRAM_API_KEY]);
 
     // Handle Deepgram connection open
     deepgramWs.addEventListener('open', () => {
@@ -264,7 +312,8 @@ export async function handleStreamingWebSocket(
     // Handle Deepgram errors
     deepgramWs.addEventListener('error', (event) => {
       logger.log('error', 'Deepgram WebSocket error', {
-        error: String(event),
+        ...extractWebSocketErrorInfo(event),
+        readyState: deepgramWs?.readyState,
       });
       sendToClient(serverSocket, {
         type: 'error',
@@ -338,9 +387,7 @@ export async function handleStreamingWebSocket(
 
   // Handle client errors
   serverSocket.addEventListener('error', (event) => {
-    logger.log('error', 'Client WebSocket error', {
-      error: String(event),
-    });
+    logger.log('error', 'Client WebSocket error', extractWebSocketErrorInfo(event));
   });
 
   // =========================================================================

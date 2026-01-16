@@ -54,5 +54,5 @@ Or view logs in Cloudflare Dashboard under Workers & Pages > hyperwhisper-v1-dev
 
 ## Important Notes
 
-- **WebSocket Authentication**: Deepgram WebSocket uses query parameter authentication (`&token=API_KEY`) instead of subprotocol authentication. Cloudflare Workers don't properly support WebSocket subprotocols for outbound connections.
+- **WebSocket Authentication**: Deepgram WebSocket uses `Sec-WebSocket-Protocol` header authentication. Pass `['token', API_KEY]` as the second argument to the WebSocket constructor, which sets the header `Sec-WebSocket-Protocol: token, API_KEY` during the handshake.
 - **Secrets vs Vars**: API keys are stored as secrets (not in wrangler.toml). Environment-specific variables are in `[env.*.vars]` sections.
