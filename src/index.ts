@@ -61,9 +61,9 @@ export default {
       return handleCORS();
     }
 
-    // ROUTE: WebSocket /ws/transcribe - Real-time streaming transcription
+    // ROUTE: WebSocket /ws/streaming-deepgram - Real-time streaming transcription
     // Bidirectional proxy to Deepgram Live API for live transcription
-    if (request.headers.get('Upgrade') === 'websocket' && url.pathname === '/ws/transcribe') {
+    if (request.headers.get('Upgrade') === 'websocket' && url.pathname === '/ws/streaming-deepgram') {
       return handleStreamingWebSocket(request, env, ctx);
     }
 
