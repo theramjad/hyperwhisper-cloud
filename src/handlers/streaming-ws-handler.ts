@@ -175,6 +175,9 @@ export async function handleStreamingWebSocket(
   });
 
   // Language configuration
+  // NOTE: Live streaming does NOT support detect_language parameter
+  // - Explicit language: pass language=<BCP-47 code>
+  // - Auto-detect: omit language parameter entirely
   if (language && language !== 'auto') {
     dgParams.set('language', language);
 
@@ -191,9 +194,10 @@ export async function handleStreamingWebSocket(
       }
     }
   } else {
-    dgParams.set('detect_language', 'true');
+    // For auto-detect: omit language parameter, Deepgram will auto-detect
+    // Vocabulary boosting is not supported without explicit language
     if (vocabulary) {
-      logger.log('debug', 'Vocabulary ignored - not supported with auto-detect language');
+      logger.log('debug', 'Vocabulary ignored - not supported with auto-detect');
     }
   }
 
