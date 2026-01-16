@@ -167,6 +167,11 @@ export async function handleStreamingWebSocket(
     interim_results: 'true',
     punctuate: 'true',
     endpointing: '300', // 300ms silence = utterance boundary
+    // Audio format parameters - REQUIRED for Deepgram to decode the audio correctly
+    // Client sends 16kHz mono PCM (Int16/linear16)
+    encoding: 'linear16',
+    sample_rate: '16000',
+    channels: '1',
   });
 
   // Language configuration
