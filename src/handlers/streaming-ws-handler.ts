@@ -197,7 +197,9 @@ export async function handleStreamingWebSocket(
     }
   }
 
-  const dgUrl = `wss://api.deepgram.com/v1/listen?${dgParams.toString()}`;
+  // Use query parameter authentication for Deepgram WebSocket
+  // Cloudflare Workers' WebSocket doesn't properly support subprotocol authentication
+  const dgUrl = `wss://api.deepgram.com/v1/listen?${dgParams.toString()}&token=${env.DEEPGRAM_API_KEY}`;
 
   // =========================================================================
   // SESSION STATE
@@ -212,9 +214,8 @@ export async function handleStreamingWebSocket(
   // =========================================================================
 
   try {
-    // Cloudflare Workers use the fetch API for outbound WebSockets
-    // Auth via subprotocol: ['token', API_KEY]
-    deepgramWs = new WebSocket(dgUrl, ['token', env.DEEPGRAM_API_KEY]);
+    // Connect to Deepgram using query parameter authentication
+    deepgramWs = new WebSocket(dgUrl);
 
     // Handle Deepgram connection open
     deepgramWs.addEventListener('open', () => {
