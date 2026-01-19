@@ -47,7 +47,10 @@ export async function requestCerebrasChat(
       model: model,
       action: 'Will retry with exponential backoff if attempts remain',
     });
-    throw new Error(`Cerebras chat failed with status ${response.status}`);
+    const error = new Error(`Cerebras chat failed with status ${response.status}`);
+    (error as { status?: number; provider?: string }).status = response.status;
+    (error as { status?: number; provider?: string }).provider = 'cerebras';
+    throw error;
   }
 
   const json = await response.json();

@@ -30,7 +30,7 @@ import {
   type AuthInput,
 } from '../pipeline';
 import { roundToTenth, retryWithBackoff } from '../utils/utils';
-import { requestGroqChat, buildCorrectionRequest } from '../api/groq-client';
+import { requestGroqChat, buildCorrectionRequest, type CorrectionRequestPayload } from '../api/groq-client';
 import { requestCerebrasChat } from '../api/cerebras-client';
 import {
   extractCorrectedText,
@@ -38,6 +38,7 @@ import {
   stripCleanMarkers,
 } from '../utils/text-processing';
 import { calculateCreditsForCost } from '../billing/billing';
+import type { Logger } from '../utils/logger';
 
 // Estimated credits for post-processing (~$0.001/request)
 const ESTIMATED_POST_PROCESS_CREDITS = 1.0;
@@ -129,6 +130,7 @@ export async function handlePostProcess(
     // =========================================================================
 
     const provider = extractLLMProvider(request, ctx.logger);
+    let providerUsed = provider;
 
     ctx.logger.log('info', 'Post-process starting - sending transcript for AI correction', {
       textLength: text.length,
@@ -145,24 +147,44 @@ export async function handlePostProcess(
     const userContent = buildTranscriptUserContent(text);
     const payload = buildCorrectionRequest(prompt, userContent);
 
-    const llmResponse = await retryWithBackoff(
-      () => provider === 'cerebras'
-        ? requestCerebrasChat(ctx.env, payload, ctx.logger, ctx.requestId)
-        : requestGroqChat(ctx.env, payload, ctx.logger, ctx.requestId),
-      {
-        maxRetries: 3,
-        initialDelayMs: 1000,
-        backoffMultiplier: 2,
-        onRetry: (attempt, error, delayMs) => {
-          ctx.logger.log('warn', `${provider} API call failed - retrying with exponential backoff`, {
-            attempt,
-            error: error.message,
-            delayMs,
-            nextRetryIn: `${delayMs}ms`,
-          });
-        },
+    let llmResponse: Awaited<ReturnType<typeof requestCerebrasChat>>;
+    try {
+      const primaryRetries = provider === 'cerebras' ? 0 : 3;
+      llmResponse = await callProviderWithRetry(
+        ctx.env,
+        payload,
+        ctx.logger,
+        ctx.requestId,
+        provider,
+        primaryRetries
+      );
+    } catch (error) {
+      if (shouldFallbackOnServerError(error)) {
+        if (provider === 'cerebras') {
+          providerUsed = 'groq';
+        } else if (provider === 'groq') {
+          providerUsed = 'cerebras';
+        } else {
+          throw error;
+        }
+        const status = getErrorStatus(error);
+        ctx.logger.log('warn', `${provider} post-process failed with 5xx - falling back to ${providerUsed}`, {
+          status,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+        const fallbackRetries = providerUsed === 'groq' ? 3 : 0;
+        llmResponse = await callProviderWithRetry(
+          ctx.env,
+          payload,
+          ctx.logger,
+          ctx.requestId,
+          providerUsed,
+          fallbackRetries
+        );
+      } else {
+        throw error;
       }
-    );
+    }
 
     const correctedText = stripCleanMarkers(extractCorrectedText(llmResponse.raw));
     const latencyMs = Date.now() - startTime;
@@ -171,7 +193,7 @@ export async function handlePostProcess(
     ctx.logger.log('info', 'Post-processing complete - correction successful', {
       latencyMs,
       costUsd,
-      provider,
+      provider: providerUsed,
       inputLength: text.length,
       outputLength: correctedText.length,
       compressionRatio: (correctedText.length / text.length * 100).toFixed(1) + '%',
@@ -189,7 +211,7 @@ export async function handlePostProcess(
         input_length: text.length,
         output_length: correctedText.length,
         endpoint: '/post-process',
-        llm_provider: provider,
+        llm_provider: providerUsed,
       })
     );
 
@@ -211,7 +233,7 @@ export async function handlePostProcess(
         ...CORS_HEADERS,
         'content-type': 'application/json',
         'X-Request-ID': ctx.requestId,
-        'X-LLM-Provider': LLM_PROVIDER_NAMES[provider],
+        'X-LLM-Provider': LLM_PROVIDER_NAMES[providerUsed],
         'X-Total-Cost-Usd': costUsd.toFixed(6),
         'X-Credits-Used': actualCredits.toFixed(1),
       },
@@ -238,6 +260,51 @@ interface ParsedBody {
   prompt: string;
   licenseKey?: string;
   deviceId?: string;
+}
+
+function getErrorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const status = (error as { status?: unknown }).status;
+  if (typeof status === 'number') return status;
+  const message = (error as { message?: unknown }).message;
+  if (typeof message === 'string') {
+    const match = message.match(/status\\s+(\\d{3})/i);
+    if (match) return Number(match[1]);
+  }
+  return undefined;
+}
+
+function shouldFallbackOnServerError(error: unknown): boolean {
+  const status = getErrorStatus(error);
+  return typeof status === 'number' && status >= 500 && status <= 599;
+}
+
+async function callProviderWithRetry(
+  env: Env,
+  payload: CorrectionRequestPayload,
+  logger: Logger,
+  requestId: string,
+  provider: LLMProvider,
+  maxRetries: number
+): Promise<Awaited<ReturnType<typeof requestCerebrasChat>>> {
+  return retryWithBackoff(
+    () => provider === 'cerebras'
+      ? requestCerebrasChat(env, payload, logger, requestId)
+      : requestGroqChat(env, payload, logger, requestId),
+    {
+      maxRetries,
+      initialDelayMs: 1000,
+      backoffMultiplier: 2,
+      onRetry: (attempt, error, delayMs) => {
+        logger.log('warn', `${provider} API call failed - retrying with exponential backoff`, {
+          attempt,
+          error: error.message,
+          delayMs,
+          nextRetryIn: `${delayMs}ms`,
+        });
+      },
+    }
+  );
 }
 
 /**

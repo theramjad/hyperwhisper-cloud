@@ -110,7 +110,10 @@ export async function requestGroqChat(
       model: model,
       action: 'Will retry with exponential backoff if attempts remain',
     });
-    throw new Error(`Groq chat failed with status ${response.status}`);
+    const error = new Error(`Groq chat failed with status ${response.status}`);
+    (error as { status?: number; provider?: string }).status = response.status;
+    (error as { status?: number; provider?: string }).provider = 'groq';
+    throw error;
   }
 
   const json = await response.json();
