@@ -310,9 +310,12 @@ async function transcribeAudio(
   }
 
   if (provider === 'groq') {
+    // Buffer the stream upfront so we can retry with fallback provider
+    const audioBuffer = await streamToArrayBuffer(audioBody);
+
     try {
       return await transcribeWithGroqFromStream(
-        audioBody,
+        audioBuffer,
         contentType,
         contentLength,
         language,
@@ -327,7 +330,7 @@ async function transcribeAudio(
           action: 'Retrying with Deepgram Nova-3',
         });
         const result = await transcribeWithDeepgramStream(
-          audioBody,
+          audioBuffer,
           contentType,
           contentLength,
           language,
@@ -498,4 +501,25 @@ function buildResponse(
       'X-Credits-Used': credits.toFixed(1),
     },
   });
+}
+
+/**
+ * Convert a ReadableStream to ArrayBuffer for reuse across fallback attempts.
+ */
+async function streamToArrayBuffer(stream: ReadableStream<Uint8Array>): Promise<ArrayBuffer> {
+  const chunks: Uint8Array[] = [];
+  const reader = stream.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) chunks.push(value);
+  }
+  const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+  const combined = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return combined.buffer;
 }
