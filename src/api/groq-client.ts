@@ -9,6 +9,22 @@ import { safeReadText, isRecord } from '../utils/utils';
 import { computeGroqChatCost, computeGroqTranscriptionCost, isGroqUsage, deriveDurationSeconds } from '../billing/cost-calculator';
 import { extractTranscriptionText } from '../utils/text-processing';
 
+// =============================================================================
+// ERROR TYPES
+// =============================================================================
+
+/**
+ * Error thrown when Groq's edge/gateway returns 403 Forbidden.
+ * This indicates edge-level blocking (not an API error) and can be used
+ * to trigger fallback to another provider.
+ */
+export class GroqEdgeBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GroqEdgeBlockedError';
+  }
+}
+
 const DEFAULT_GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
 const GROQ_CHAT_MODEL = 'llama-3.3-70b-versatile';
 const GROQ_TRANSCRIPTION_MODEL = 'whisper-large-v3';
@@ -338,6 +354,9 @@ async function transcribeWithGroq(
 
     if (groqResponse.status === 401) {
       throw new Error('Groq API key is invalid or expired');
+    }
+    if (groqResponse.status === 403) {
+      throw new GroqEdgeBlockedError(`Groq edge returned 403 Forbidden`);
     }
     if (groqResponse.status === 429) {
       throw new Error('Groq rate limit exceeded');

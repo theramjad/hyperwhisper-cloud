@@ -50,6 +50,7 @@ import {
   transcribeWithGroqFromStream,
   transcribeWithGroqFromUrl,
   StreamingTranscriptionResult as GroqResult,
+  GroqEdgeBlockedError,
 } from '../api/groq-client';
 import {
   uploadToR2,
@@ -309,15 +310,37 @@ async function transcribeAudio(
   }
 
   if (provider === 'groq') {
-    return transcribeWithGroqFromStream(
-      audioBody,
-      contentType,
-      contentLength,
-      language,
-      initialPrompt,
-      ctx.env,
-      ctx.logger
-    );
+    try {
+      return await transcribeWithGroqFromStream(
+        audioBody,
+        contentType,
+        contentLength,
+        language,
+        initialPrompt,
+        ctx.env,
+        ctx.logger
+      );
+    } catch (error) {
+      if (error instanceof GroqEdgeBlockedError) {
+        ctx.logger.log('warn', 'Groq 403 - falling back to Deepgram', {
+          originalError: error.message,
+          action: 'Retrying with Deepgram Nova-3',
+        });
+        const result = await transcribeWithDeepgramStream(
+          audioBody,
+          contentType,
+          contentLength,
+          language,
+          initialPrompt,
+          ctx.env,
+          ctx.logger
+        );
+        // Mark as fallback for response headers
+        (result as TranscriptionResult & { fallbackFrom?: string }).fallbackFrom = 'groq';
+        return result;
+      }
+      throw error;
+    }
   }
 
   // Default: ElevenLabs
@@ -379,13 +402,33 @@ async function transcribeViaR2(
         ctx.logger
       );
     } else if (provider === 'groq') {
-      result = await transcribeWithGroqFromUrl(
-        presignedUrl,
-        language,
-        initialPrompt,
-        ctx.env,
-        ctx.logger
-      );
+      try {
+        result = await transcribeWithGroqFromUrl(
+          presignedUrl,
+          language,
+          initialPrompt,
+          ctx.env,
+          ctx.logger
+        );
+      } catch (error) {
+        if (error instanceof GroqEdgeBlockedError) {
+          ctx.logger.log('warn', 'Groq 403 - falling back to Deepgram', {
+            originalError: error.message,
+            action: 'Retrying with Deepgram Nova-3',
+          });
+          result = await transcribeWithDeepgramUrl(
+            presignedUrl,
+            language,
+            initialPrompt,
+            ctx.env,
+            ctx.logger
+          );
+          // Mark as fallback for response headers
+          (result as TranscriptionResult & { fallbackFrom?: string }).fallbackFrom = 'groq';
+        } else {
+          throw error;
+        }
+      }
     } else {
       result = await transcribeWithElevenLabsFromUrl(
         presignedUrl,
@@ -422,7 +465,12 @@ function buildResponse(
   provider: STTProvider
 ): Response {
 
-  const providerName = PROVIDER_NAMES[provider];
+  // Check if this was a fallback from another provider
+  const fallbackFrom = (result as TranscriptionResult & { fallbackFrom?: string }).fallbackFrom;
+  const actualProvider: STTProvider = fallbackFrom ? 'deepgram' : provider;
+  const providerName = fallbackFrom
+    ? `${PROVIDER_NAMES[actualProvider]} (fallback from ${fallbackFrom})`
+    : PROVIDER_NAMES[provider];
 
   const response: StreamingTranscriptionResponse = {
     text: result.text,
